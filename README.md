@@ -51,4 +51,4 @@ npm test
 npm run typecheck
 ```
 
-To run it as one server, use `npm start`, which builds the client and serves it from the API on `PORT`. People sign up with an email and password, and each account only sees its own projects. Anyone who can reach the app can create an account and spend your AI key, so set `APP_PASSWORD` to put a shared password in front of everything during a private beta. View-only links work without a login or the password. Plans live in `server/data`, so a host needs a persistent disk.
+To run it as one server, use `npm start`, which builds the client and serves it from the API on `PORT`. People sign up with an email and password, and each account only sees its own projects. Anyone who can reach the app can create an account and spend your AI key, so set `APP_PASSWORD` to put a shared password in front of everything during a private beta. View-only links work without a login or the password. Each account gets `DAILY_BUILDS` builds and previews a day, 20 by default. Plans live in `server/data`, so a host needs a persistent disk.

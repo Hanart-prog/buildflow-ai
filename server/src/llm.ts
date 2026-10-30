@@ -111,6 +111,7 @@ const DEMO_SPEECH =
   'I want a recipe sharing app where people can post recipes and search by ingredient. It has to work on phones, and maybe we add meal planning later.';
 
 const DEMO_REQUIREMENTS = {
+  name: 'Recipe Sharing App',
   requirements: [
     { id: 'req-post-recipes', text: 'Users can post recipes.', type: 'functional' },
     { id: 'req-ingredient-search', text: 'Users can search recipes by ingredient.', type: 'functional' },

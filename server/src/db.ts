@@ -24,6 +24,12 @@ const SCHEMA = `
   );
   ALTER TABLE projects ADD COLUMN IF NOT EXISTS owner_id TEXT REFERENCES users (id) ON DELETE CASCADE;
   CREATE INDEX IF NOT EXISTS projects_owner ON projects (owner_id);
+  CREATE TABLE IF NOT EXISTS usage (
+    user_id TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    day DATE NOT NULL DEFAULT CURRENT_DATE,
+    builds INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, day)
+  );
 `;
 
 type Row = {
@@ -167,6 +173,24 @@ export async function openStore(dataDir?: string) {
         [tokenHash],
       );
       return rows[0];
+    },
+
+    // False once today's allowance is used up, and nothing is counted then.
+    async takeBuild(userId: string, limit: number): Promise<boolean> {
+      const { rows } = await db.query(
+        `INSERT INTO usage (user_id, builds) VALUES ($1, 1)
+         ON CONFLICT (user_id, day) DO UPDATE SET builds = usage.builds + 1
+         WHERE usage.builds < $2 RETURNING builds`,
+        [userId, limit],
+      );
+      return rows.length > 0;
+    },
+
+    async refundBuild(userId: string) {
+      await db.query(
+        'UPDATE usage SET builds = GREATEST(builds - 1, 0) WHERE user_id = $1 AND day = CURRENT_DATE',
+        [userId],
+      );
     },
 
     async deleteSession(tokenHash: string) {

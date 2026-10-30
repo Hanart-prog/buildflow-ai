@@ -20,6 +20,9 @@ const llm =
 const store = await openStore(path.join(here, '../data/pg'));
 const port = Number(process.env.PORT) || 3001;
 
-createApp(store, llm, { password: process.env.APP_PASSWORD }).listen(port, () => {
+createApp(store, llm, {
+  password: process.env.APP_PASSWORD,
+  dailyBuilds: Number(process.env.DAILY_BUILDS) || undefined,
+}).listen(port, () => {
   console.log(`BuildFlow API on http://localhost:${port}`);
 });
