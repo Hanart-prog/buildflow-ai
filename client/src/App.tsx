@@ -11,6 +11,7 @@ import type {
 } from '../../shared/plan';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
+import { ExportMenu } from './ExportMenu';
 import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
 import { Questions } from './Questions';
@@ -68,6 +69,11 @@ export function App() {
   const [focus, setFocus] = useState<(Focus & { label: string }) | null>(null);
   const [busy, setBusy] = useState<'transcribing' | 'reading' | 'mapping' | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [jump, setJump] = useState<string | undefined>();
+  // The plan from before the last build, for undoing that build as a whole.
+  const [undoPlan, setUndoPlan] = useState<Plan | null>(null);
+  // Set while a failed build can be run again.
+  const [retry, setRetry] = useState<(() => void) | null>(null);
   const [notesOpen, setNotesOpen] = useState(false);
   const [placed, setPlaced] = useState<number | null>(null);
   // Nodes streamed so far per board, shown on the tabs until the plan lands.
@@ -98,6 +104,9 @@ export function App() {
 
   const show = (next: Project | null) => {
     setPreviewing(false);
+    setUndoPlan(null);
+    setRetry(null);
+    setJump(undefined);
     fresh.current = NO_FRESH;
     setProject(next);
     setRevision((r) => r + 1);
@@ -211,6 +220,7 @@ export function App() {
   ) => guard(async () => {
     // The board being added to is the one drawn live.
     const board = focus?.board ?? 'system';
+    setRetry(null);
     setBusy('reading');
     try {
       await flushSave();
@@ -256,12 +266,14 @@ export function App() {
         setSpeech('');
         setChosenScope(null);
         setFocus(null);
+        setUndoPlan(before);
       } catch (e) {
         // Whatever was drawn or streamed so far was never saved.
         live.current?.dispose();
         setProject((current) => current && { ...current, plan: before });
         setRevision((r) => r + 1);
         setPlaced(null);
+        setRetry(() => () => build(text, buildScope, name, extra));
         throw e;
       } finally {
         setStreamed(NO_COUNTS);
@@ -271,6 +283,27 @@ export function App() {
       setBusy(null);
     }
   })();
+
+  const undoBuild = guard(async () => {
+    if (!project || !undoPlan) return;
+    if (!window.confirm('Undo the last build? Changes made since then will be lost too.')) return;
+    if (pendingSave.current) {
+      clearTimeout(pendingSave.current.timer);
+      pendingSave.current = null;
+    }
+    const restored = await api.savePlan(project.id, undoPlan);
+    fresh.current = NO_FRESH;
+    setProject(restored);
+    setRevision((r) => r + 1);
+    setUndoPlan(null);
+    setSaveState('saved');
+  });
+
+  const jumpTo = (board: BoardName, nodeId: string) => {
+    setJump(nodeId);
+    setTab(board);
+    setFocus(null);
+  };
 
   const generate = () => build(speech, focus ? 'feature' : scope, nameFrom(speech));
 
@@ -349,6 +382,9 @@ export function App() {
           key={`${project.id}-${tab}-${revision}`}
           name={tab}
           board={project.plan.boards[tab]}
+          plan={project.plan}
+          selectId={jump}
+          onJump={jumpTo}
           projectId={project.id}
           onFlush={flushSave}
           onExtend={extendNode}
@@ -396,6 +432,7 @@ export function App() {
                   setTab(t.name);
                   setPreviewing(false);
                   setFocus(null);
+                  setJump(undefined);
                 }}
                 disabled={busy !== null || placed !== null || drafting}
               >
@@ -423,6 +460,15 @@ export function App() {
                 {saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}
               </span>
             )}
+            {undoPlan && !busy && placed === null && <button onClick={undoBuild}>Undo build</button>}
+            {!hero && (
+              <ExportMenu
+                key={project.id}
+                project={project}
+                onFlush={flushSave}
+                onError={setError}
+              />
+            )}
             <button className="new-project" onClick={startNew}>
               + New project
             </button>
@@ -433,6 +479,9 @@ export function App() {
       {error && (
         <div className="error" role="alert">
           {error}
+          {retry && !busy && (
+            <button onClick={() => retry()}>Try again</button>
+          )}
           <button className="quiet" onClick={() => setError(null)}>
             Dismiss
           </button>
