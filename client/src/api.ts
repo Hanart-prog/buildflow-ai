@@ -9,9 +9,16 @@ import type {
   ProjectSummary,
   Scope,
   SharedPlan,
+  User,
 } from '../../shared/plan';
 
+let sessionExpired = () => {};
+export const setSessionExpired = (handler: () => void) => {
+  sessionExpired = handler;
+};
+
 async function failure(res: Response) {
+  if (res.status === 401 && new URL(res.url).pathname.startsWith('/api/projects')) sessionExpired();
   const body = await res.json().catch(() => null);
   return new Error(body?.error ?? `Request failed (${res.status})`);
 }
@@ -70,6 +77,12 @@ const preview = async (id: string, onEvent: (event: Exclude<PreviewEvent, Termin
   readStream<PreviewEvent>(await fetch(`/api/projects/${id}/preview`, { method: 'POST' }), onEvent);
 
 export const api = {
+  me: () => request<{ user: User | null }>('/auth/me'),
+  signup: (email: string, password: string) =>
+    request<{ user: User }>('/auth/signup', json('POST', { email, password })),
+  login: (email: string, password: string) =>
+    request<{ user: User }>('/auth/login', json('POST', { email, password })),
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
   list: () => request<ProjectSummary[]>('/projects'),
   get: (id: string) => request<Project>(`/projects/${id}`),
   create: (name: string) => request<Project>('/projects', json('POST', { name })),

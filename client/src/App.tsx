@@ -8,7 +8,9 @@ import type {
   ProjectSummary,
   Question,
   Scope,
+  User,
 } from '../../shared/plan';
+import { AccountMenu } from './AccountMenu';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import { ExportMenu } from './ExportMenu';
@@ -71,7 +73,9 @@ function viewInAddress() {
   };
 }
 
-export function App() {
+type AppProps = { user: User; idea?: string; onLogout: () => void };
+
+export function App({ user, idea, onLogout }: AppProps) {
   const { theme, toggle: toggleTheme } = useTheme();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -80,7 +84,7 @@ export function App() {
   const [drafting, setDrafting] = useState(false);
   // Bumped when a plan arrives from the server, so the canvas rebuilds from it.
   const [revision, setRevision] = useState(0);
-  const [speech, setSpeech] = useState('');
+  const [speech, setSpeech] = useState(idea ?? '');
   const [chosenScope, setChosenScope] = useState<Scope | null>(null);
   const [focus, setFocus] = useState<(Focus & { label: string }) | null>(null);
   const [busy, setBusy] = useState<'transcribing' | 'reading' | 'mapping' | null>(null);
@@ -155,7 +159,7 @@ export function App() {
       const list = await api.list();
       setProjects(list);
       const view = viewInAddress();
-      if (list.some((p) => p.id === view.id)) {
+      if (!idea && list.some((p) => p.id === view.id)) {
         if (view.tab) setTab(view.tab);
         await open(view.id!, view.previewing);
       }
@@ -182,6 +186,13 @@ export function App() {
     setProject(created);
     return created;
   };
+
+  const logOut = guard(async () => {
+    await flushSave();
+    await api.logout();
+    window.history.replaceState(null, '', '/');
+    onLogout();
+  });
 
   const deleteProject = guard(async () => {
     if (!project || !window.confirm(`Delete "${project.name}"?`)) return;
@@ -335,6 +346,10 @@ export function App() {
   };
 
   const generate = () => build(speech, focus ? 'feature' : scope, nameFrom(speech));
+
+  useEffect(() => {
+    if (restored && idea) generate();
+  }, [restored]);
 
   const extendNode = (nodeId: string, label: string) => {
     setFocus({ board: tab, nodeId, label });
@@ -490,6 +505,7 @@ export function App() {
             <ExportMenu key={project.id} project={project} onFlush={flushSave} onError={setError} />
           )}
           <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busy !== null || placed !== null} />
+          <AccountMenu user={user} disabled={busy !== null || placed !== null || drafting} onLogout={logOut} />
           {project && (
             <button className="new-project" onClick={startNew} disabled={busy !== null || placed !== null || drafting}>
               + New project

@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { ProjectSummary } from '../../shared/plan';
+import { useDismiss } from './useDismiss';
 
 type Props = {
   projects: ProjectSummary[];
@@ -11,23 +12,7 @@ type Props = {
 
 export function ProjectMenu({ projects, current, disabled, onOpen, onDelete }: Props) {
   const [open, setOpen] = useState(false);
-  const menu = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!menu.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onClick);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onClick);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const menu = useDismiss<HTMLDivElement>(open, useCallback(() => setOpen(false), []));
 
   return (
     <div className="projects" ref={menu}>
