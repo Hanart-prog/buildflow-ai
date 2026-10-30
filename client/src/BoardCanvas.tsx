@@ -423,6 +423,7 @@ export function BoardCanvas({
   latest.current = { onChange, onProgress };
   const building = useRef(false);
   const stopBuild = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
 
   const editorProps = useMemo<FreeLayoutProps>(() => {
     const laidOut = layoutBoard(board, name);
@@ -522,6 +523,7 @@ export function BoardCanvas({
         // Saved lines are drawn before the cards are measured, which stacks them
         // at the origin until they are recalculated.
         requestAnimationFrame(() => {
+          if (!mounted.current) return;
           ctx.document.getAllNodes().forEach((node) => node.ports.updateAllPorts());
           ctx.document.linesManager.forceUpdate();
           applyCollapse(ctx);
@@ -535,6 +537,7 @@ export function BoardCanvas({
 
   useEffect(
     () => () => {
+      mounted.current = false;
       stopBuild.current?.();
       live.current = null;
     },
