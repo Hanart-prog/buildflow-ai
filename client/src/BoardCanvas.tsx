@@ -22,6 +22,7 @@ import { createFreeSnapPlugin } from '@flowgram.ai/free-snap-plugin';
 import { MinimapRender, createMinimapPlugin } from '@flowgram.ai/minimap-plugin';
 import { linkedNodes, type Board, type BoardName, type NodeDetails, type Plan } from '../../shared/plan';
 import { api } from './api';
+import { canvasColors } from './theme';
 import { KindIcon } from './KindIcon';
 import { NODE_HEIGHT, NODE_WIDTH, isHorizontal, layoutBoard } from './layout';
 import {
@@ -89,13 +90,14 @@ function CardBody({ collapsible }: { collapsible: boolean }) {
 
 function CardNode(props: WorkflowNodeProps) {
   const { selected, form } = useNodeRender();
+  const colors = canvasColors();
   return (
     <WorkflowNodeRenderer
       className={`node${selected ? ' selected' : ''}`}
       node={props.node}
-      portPrimaryColor="#ffb38a"
-      portSecondaryColor="#55708f"
-      portBackgroundColor="#101a27"
+      portPrimaryColor={colors.portOn}
+      portSecondaryColor={colors.portOff}
+      portBackgroundColor={colors.portBackground}
     >
       {form?.render()}
     </WorkflowNodeRenderer>
@@ -350,6 +352,7 @@ function Tools({ name, readOnly, onTidy }: { name: BoardName; readOnly: boolean;
           </>
         )}
         <button
+          className="lines"
           title={tools.lineType === LineType.BEZIER ? 'Use square lines' : 'Use curved lines'}
           onClick={() =>
             tools.switchLineType(tools.lineType === LineType.BEZIER ? LineType.LINE_CHART : LineType.BEZIER)
@@ -427,6 +430,7 @@ export function BoardCanvas({
     const nodes = laidOut.nodes.filter((n) => !incoming.has(n.id));
     const edges = laidOut.edges.filter((e) => !incoming.has(e.source) && !incoming.has(e.target));
     const horizontal = isHorizontal(name);
+    const colors = canvasColors();
 
     const open = (ctx: FreeLayoutPluginContext) => {
       const build = createLiveBuild(ctx, name, { nodes, edges }, {
@@ -452,7 +456,7 @@ export function BoardCanvas({
     };
 
     return {
-      background: { backgroundColor: 'transparent', dotColor: '#2a4058', dotSize: 1, gridSize: 26, dotOpacity: 1 },
+      background: { backgroundColor: colors.canvas, dotColor: colors.dots, dotSize: 1, gridSize: 26, dotOpacity: 1 },
       initialData: { nodes: nodes.map(toNodeJson), edges: edges.map(toEdgeJson) },
       nodeRegistries: [
         {
@@ -472,27 +476,27 @@ export function BoardCanvas({
       history: { enable: true, enableChangeNode: true },
       lineColor: {
         hidden: 'transparent',
-        default: '#5b80a8',
-        drawing: '#ff9a63',
-        hovered: '#a9cbec',
-        selected: '#ff9a63',
-        error: '#ff5d5d',
-        flowing: '#ff9a63',
+        default: colors.line,
+        drawing: colors.lineActive,
+        hovered: colors.lineHover,
+        selected: colors.lineActive,
+        error: colors.error,
+        flowing: colors.lineActive,
       },
       materials: { renderDefaultNode: CardNode },
       plugins: () => [
         createFreeLinesPlugin({ renderInsideLine: LineLabel }),
-        createFreeSnapPlugin({ edgeColor: '#ff9a63', alignColor: '#ff9a63' }),
+        createFreeSnapPlugin({ edgeColor: colors.lineActive, alignColor: colors.lineActive }),
         createMinimapPlugin({
           disableLayer: true,
           canvasStyle: {
             canvasWidth: 180,
             canvasHeight: 110,
-            canvasBackground: 'rgba(16, 26, 39, 0.9)',
+            canvasBackground: colors.map,
             canvasBorderRadius: 12,
-            nodeColor: '#55708f',
-            viewportBackground: 'rgba(255, 154, 99, 0.12)',
-            viewportBorderColor: '#ff9a63',
+            nodeColor: colors.mapNode,
+            viewportBackground: colors.mapView,
+            viewportBorderColor: colors.mapBorder,
             overlayColor: 'rgba(0, 0, 0, 0)',
           },
         }),
