@@ -8,6 +8,7 @@ import type {
   Project,
   ProjectSummary,
   Scope,
+  SharedPlan,
 } from '../../shared/plan';
 
 async function failure(res: Response) {
@@ -77,6 +78,9 @@ export const api = {
   remove: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
   generate,
   preview,
+  share: (id: string) => request<{ shareId: string }>(`/projects/${id}/share`, { method: 'POST' }),
+  unshare: (id: string) => request<void>(`/projects/${id}/share`, { method: 'DELETE' }),
+  shared: (shareId: string) => request<SharedPlan>(`/shared/${shareId}`),
   details: (id: string, board: BoardName, nodeId: string) =>
     request<NodeDetails>(`/projects/${id}/details`, json('POST', { board, nodeId })),
   transcribe: (id: string, audio: Blob) => {

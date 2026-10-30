@@ -3,6 +3,7 @@ import {
   EditorRenderer,
   Field,
   FreeLayoutEditorProvider,
+  LineType,
   WorkflowNodeRenderer,
   WorkflowSelectService,
   getNodeForm,
@@ -19,12 +20,13 @@ import {
 import { createFreeLinesPlugin } from '@flowgram.ai/free-lines-plugin';
 import { createFreeSnapPlugin } from '@flowgram.ai/free-snap-plugin';
 import { MinimapRender, createMinimapPlugin } from '@flowgram.ai/minimap-plugin';
-import type { Board, BoardName, NodeDetails } from '../../shared/plan';
+import { linkedNodes, type Board, type BoardName, type NodeDetails, type Plan } from '../../shared/plan';
 import { api } from './api';
 import { KindIcon } from './KindIcon';
 import { NODE_HEIGHT, NODE_WIDTH, isHorizontal, layoutBoard } from './layout';
 import {
   NODE_TYPE,
+  applyCollapse,
   createLiveBuild,
   fit,
   reducedMotion,
@@ -43,7 +45,27 @@ const KINDS: Record<BoardName, string[]> = {
 // Small boards fit on screen, where the minimap would only cover nodes.
 const MINIMAP_THRESHOLD = 12;
 
-function CardBody() {
+function CollapseToggle() {
+  const { node, form } = useNodeRender();
+  const children = node.lines?.outputNodes.length ?? 0;
+  if (!form || children === 0) return null;
+  const collapsed = Boolean(form.getValueIn('collapsed'));
+  return (
+    <button
+      className="collapse"
+      aria-label={collapsed ? 'Show what is below this card' : 'Hide what is below this card'}
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        form.setValueIn('collapsed', !collapsed);
+      }}
+    >
+      {collapsed ? `+${children}` : '−'}
+    </button>
+  );
+}
+
+function CardBody({ collapsible }: { collapsible: boolean }) {
   return (
     <Field<string> name="kind">
       {({ field: kind }) => (
@@ -51,6 +73,9 @@ function CardBody() {
           <header>
             <KindIcon kind={kind.value} />
             <span>{kind.value}</span>
+            {collapsible && (
+              <Field<boolean> name="collapsed">{() => <CollapseToggle />}</Field>
+            )}
           </header>
           <Field<string> name="label">{({ field }) => <strong>{field.value}</strong>}</Field>
           <Field<string> name="description">
@@ -86,6 +111,32 @@ function LineLabel({ line }: { line: WorkflowLineEntity }) {
       {label}
     </div>
   );
+}
+
+function DetailSections({ details }: { details: NodeDetails }) {
+  return (
+    <>
+      <p className="details-summary">{details.summary}</p>
+      {details.sections.map((section) => (
+        <section key={section.title}>
+          <h4>{section.title}</h4>
+          <ul>
+            {section.items.map((item) => (
+              <li key={item}>{item}</li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </>
+  );
+}
+
+function StoredDetails({ details }: { details: NodeDetails | undefined }) {
+  return details ? (
+    <div className="details">
+      <DetailSections details={details} />
+    </div>
+  ) : null;
 }
 
 // Details are written the first time a node is opened and kept with it. The
@@ -127,21 +178,7 @@ function Details({ name, node, projectId, details, onFlush, onLoaded }: DetailsP
 
   return (
     <div className="details">
-      {details && (
-        <>
-          <p className="details-summary">{details.summary}</p>
-          {details.sections.map((section) => (
-            <section key={section.title}>
-              <h4>{section.title}</h4>
-              <ul>
-                {section.items.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </>
-      )}
+      {details && <DetailSections details={details} />}
       {loading && <p className="details-status">Working out the details…</p>}
       {error && <p className="details-status failed">{error}</p>}
       {!loading && (details || error) && (
@@ -153,12 +190,16 @@ function Details({ name, node, projectId, details, onFlush, onLoaded }: DetailsP
 
 type InspectorProps = {
   name: BoardName;
-  projectId: string;
-  onFlush: () => Promise<void>;
-  onExtend: (nodeId: string, label: string) => void;
+  plan: Plan;
+  projectId?: string;
+  onFlush?: () => Promise<void>;
+  onExtend?: (nodeId: string, label: string) => void;
+  onJump: (board: BoardName, nodeId: string) => void;
 };
 
-function Inspector({ name, projectId, onFlush, onExtend }: InspectorProps) {
+const BOARD_LABELS: Record<BoardName, string> = { system: 'System', features: 'Feature', roadmap: 'Roadmap' };
+
+function Inspector({ name, plan, projectId, onFlush, onExtend, onJump }: InspectorProps) {
   const selection = useService(WorkflowSelectService);
   const [node, setNode] = useState<WorkflowNodeEntity | undefined>();
   const [, redraw] = useState(0);
@@ -180,6 +221,7 @@ function Inspector({ name, projectId, onFlush, onExtend }: InspectorProps) {
     redraw((n) => n + 1);
   };
   const kind: string = form.getValueIn('kind');
+  const links = linkedNodes(plan, name, node.id);
 
   return (
     <aside className="inspector" key={node.id}>
@@ -189,51 +231,70 @@ function Inspector({ name, projectId, onFlush, onExtend }: InspectorProps) {
       </header>
       <h3>{form.getValueIn('label')}</h3>
       {form.getValueIn('description') && <p className="muted">{form.getValueIn('description')}</p>}
-      <button className="primary" onClick={() => onExtend(node.id, form.getValueIn('label'))}>
-        Build on this
-      </button>
-
-      <Details
-        key={node.id}
-        name={name}
-        node={node}
-        projectId={projectId}
-        details={form.getValueIn('details')}
-        onFlush={onFlush}
-        onLoaded={(details) => set('details', details)}
-      />
-
-      <details className="edit-node">
-        <summary>Edit this node</summary>
-        <label>
-          Label
-          <input value={form.getValueIn('label')} onChange={(e) => set('label', e.target.value)} />
-        </label>
-        <label>
-          Type
-          <select value={kind} onChange={(e) => set('kind', e.target.value)}>
-            {[...new Set([...KINDS[name], kind])].map((k) => (
-              <option key={k}>{k}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Description
-          <textarea
-            rows={3}
-            value={form.getValueIn('description')}
-            onChange={(e) => set('description', e.target.value)}
-          />
-        </label>
-        <button className="danger" onClick={() => node.dispose()}>
-          Delete node
+      {onExtend && (
+        <button className="primary" onClick={() => onExtend(node.id, form.getValueIn('label'))}>
+          Build on this
         </button>
-      </details>
+      )}
+      {links.length > 0 && (
+        <div className="linked">
+          {links.map((link) => (
+            <button key={`${link.board}-${link.id}`} onClick={() => onJump(link.board, link.id)}>
+              <span>{BOARD_LABELS[link.board]}</span>
+              {link.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {projectId && onFlush ? (
+        <Details
+          key={node.id}
+          name={name}
+          node={node}
+          projectId={projectId}
+          details={form.getValueIn('details')}
+          onFlush={onFlush}
+          onLoaded={(details) => set('details', details)}
+        />
+
+      ) : (
+        <StoredDetails details={form.getValueIn('details')} />
+      )}
+
+      {projectId && (
+        <details className="edit-node">
+          <summary>Edit this node</summary>
+          <label>
+            Label
+            <input value={form.getValueIn('label')} onChange={(e) => set('label', e.target.value)} />
+          </label>
+          <label>
+            Type
+            <select value={kind} onChange={(e) => set('kind', e.target.value)}>
+              {[...new Set([...KINDS[name], kind])].map((k) => (
+                <option key={k}>{k}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Description
+            <textarea
+              rows={3}
+              value={form.getValueIn('description')}
+              onChange={(e) => set('description', e.target.value)}
+            />
+          </label>
+          <button className="danger" onClick={() => node.dispose()}>
+            Delete node
+          </button>
+        </details>
+      )}
     </aside>
   );
 }
 
-function Tools({ name, onTidy }: { name: BoardName; onTidy: (board: Board) => void }) {
+function Tools({ name, readOnly, onTidy }: { name: BoardName; readOnly: boolean; onTidy: (board: Board) => void }) {
   const ctx = useClientContext();
   const tools = usePlaygroundTools();
   const [history, setHistory] = useState({ undo: false, redo: false });
@@ -274,18 +335,28 @@ function Tools({ name, onTidy }: { name: BoardName; onTidy: (board: Board) => vo
   return (
     <>
       <div className="tools">
-        <button onClick={addNode}>Add node</button>
-        <button onClick={tidy} disabled={count === 0}>
-          Tidy
+        {!readOnly && (
+          <>
+            <button onClick={addNode}>Add node</button>
+            <button onClick={tidy} disabled={count === 0}>
+              Tidy
+            </button>
+            <button aria-label="Undo" onClick={() => ctx.history.undo()} disabled={!history.undo}>
+              ↶
+            </button>
+            <button aria-label="Redo" onClick={() => ctx.history.redo()} disabled={!history.redo}>
+              ↷
+            </button>
+          </>
+        )}
+        <button
+          title={tools.lineType === LineType.BEZIER ? 'Use square lines' : 'Use curved lines'}
+          onClick={() =>
+            tools.switchLineType(tools.lineType === LineType.BEZIER ? LineType.LINE_CHART : LineType.BEZIER)
+          }
+        >
+          Lines
         </button>
-        <i />
-        <button aria-label="Undo" onClick={() => ctx.history.undo()} disabled={!history.undo}>
-          ↶
-        </button>
-        <button aria-label="Redo" onClick={() => ctx.history.redo()} disabled={!history.redo}>
-          ↷
-        </button>
-        <i />
         <button aria-label="Zoom out" onClick={() => tools.zoomout()}>
           −
         </button>
@@ -313,10 +384,15 @@ function Tools({ name, onTidy }: { name: BoardName; onTidy: (board: Board) => vo
 type Props = {
   name: BoardName;
   board: Board;
-  projectId: string;
+  plan: Plan;
+  readOnly?: boolean;
+  // Node to open as soon as the canvas is ready, after a jump from another board.
+  selectId?: string;
+  projectId?: string;
   // Writes pending edits, so the server sees the node a request refers to.
-  onFlush: () => Promise<void>;
-  onExtend: (nodeId: string, label: string) => void;
+  onFlush?: () => Promise<void>;
+  onExtend?: (nodeId: string, label: string) => void;
+  onJump: (board: BoardName, nodeId: string) => void;
   // Node ids to draw one at a time when the canvas opens.
   fresh: string[];
   // Filled while the canvas is open, for feeding it a plan as it is generated.
@@ -328,9 +404,13 @@ type Props = {
 export function BoardCanvas({
   name,
   board,
+  plan,
+  readOnly = false,
+  selectId,
   projectId,
   onFlush,
   onExtend,
+  onJump,
   fresh,
   live,
   onChange,
@@ -384,9 +464,10 @@ export function BoardCanvas({
               { type: 'output', location: horizontal ? 'right' : 'bottom' },
             ],
           },
-          formMeta: { render: () => <CardBody /> },
+          formMeta: { render: () => <CardBody collapsible={name === 'features'} /> },
         },
       ],
+      readonly: readOnly,
       nodeEngine: { enable: true },
       history: { enable: true, enableChangeNode: true },
       lineColor: {
@@ -427,7 +508,9 @@ export function BoardCanvas({
         });
       },
       onContentChange: (ctx) => {
-        if (!building.current) latest.current.onChange(toBoard(ctx.document.toJSON()));
+        if (building.current) return;
+        applyCollapse(ctx);
+        latest.current.onChange(toBoard(ctx.document.toJSON()));
       },
       onAllLayersRendered: (ctx) => {
         fit(ctx, false);
@@ -437,6 +520,10 @@ export function BoardCanvas({
         requestAnimationFrame(() => {
           ctx.document.getAllNodes().forEach((node) => node.ports.updateAllPorts());
           ctx.document.linesManager.forceUpdate();
+          applyCollapse(ctx);
+          fit(ctx, false);
+          const selected = selectId && ctx.document.getNode(selectId);
+          if (selected) ctx.selection.selection = [selected];
         });
       },
     };
@@ -454,8 +541,15 @@ export function BoardCanvas({
     <div className="canvas">
       <FreeLayoutEditorProvider {...editorProps}>
         <EditorRenderer className="editor" />
-        <Tools name={name} onTidy={onChange} />
-        <Inspector name={name} projectId={projectId} onFlush={onFlush} onExtend={onExtend} />
+        <Tools name={name} readOnly={readOnly} onTidy={onChange} />
+        <Inspector
+          name={name}
+          plan={plan}
+          projectId={projectId}
+          onFlush={onFlush}
+          onExtend={onExtend}
+          onJump={onJump}
+        />
       </FreeLayoutEditorProvider>
     </div>
   );

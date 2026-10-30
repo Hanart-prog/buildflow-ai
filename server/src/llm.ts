@@ -248,6 +248,12 @@ ${demoScreen('🍅 What can I cook?', '<div class="card row"><div class="photo">
 <!-- screen: Recipe | mobile -->
 ${demoScreen('Smoky tomato orzo', '<div class="photo wide">🍝</div><div class="card">Toast the orzo in butter until golden, then add the tomatoes.</div><p class="muted">Saved by 214 home cooks</p>')}`;
 
+const DEMO_LINKS = [
+  { feature: 'feat-editor', system: ['web-client', 'api', 'db'], roadmap: ['ms-posting'] },
+  { feature: 'feat-photos', system: ['api', 'images'], roadmap: ['ms-posting'] },
+  { feature: 'feat-search', system: ['search', 'indexer'], roadmap: ['ms-search'] },
+];
+
 // Runs the real pipeline on canned model replies, so the app works without a key.
 export const demoLlm: Llm = {
   complete: async (system, user, onDelta) => {
@@ -256,7 +262,7 @@ export const demoLlm: Llm = {
     if (system === EXTRACT_SYSTEM) {
       return JSON.stringify(feature ? DEMO_FEATURE_REQUIREMENTS : DEMO_REQUIREMENTS);
     }
-    const reply = JSON.stringify(feature ? DEMO_FEATURE_BOARDS : DEMO_BOARDS);
+    const reply = JSON.stringify(feature ? DEMO_FEATURE_BOARDS : { ...DEMO_BOARDS, links: DEMO_LINKS });
     onDelta?.(reply);
     return reply;
   },

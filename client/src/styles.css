@@ -111,6 +111,14 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
 
 .actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 12px; }
 .save { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.actions > button:not(.new-project), .export > button { padding: 9px 13px; background: var(--surface); border-radius: 13px; color: var(--muted); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.export { position: relative; }
+.export-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; display: flex; flex-direction: column; gap: 2px; width: 240px; padding: 6px; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 13px; box-shadow: 0 12px 36px rgb(0 0 0 / 0.4); }
+.export-menu button { background: none; border-color: transparent; text-align: left; }
+.export-menu button:hover:not(:disabled) { background: var(--raised); border-color: transparent; }
+.export-menu p { padding: 5px 12px; color: var(--accent); font-size: 12.5px; }
+.shared-name { padding-right: 10px; color: var(--muted); }
+.shared-missing { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 16px; }
 .new-project {
   padding: 9px 15px;
   background: var(--surface);
@@ -173,6 +181,7 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.card header .collapse { margin-left: auto; min-width: 26px; padding: 0 6px; background: rgb(255 255 255 / 0.06); border-color: transparent; border-radius: 7px; color: var(--ink); font-size: 11px; line-height: 1.5; }
 .card svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .card strong { display: block; font-size: 15px; font-weight: 600; line-height: 1.25; }
 .card p {
@@ -217,10 +226,10 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
   padding: 5px;
   border-radius: 13px;
 }
-.tools button { min-width: 32px; padding: 6px 9px; background: none; border-color: transparent; color: var(--muted); }
+.tools button { min-width: 28px; padding: 6px 7px; background: none; border-color: transparent; color: var(--muted); }
 .tools button:hover:not(:disabled) { color: var(--ink); background: var(--raised); border-color: transparent; }
 .tools i { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
-.tools output { min-width: 40px; color: var(--faint); font-family: var(--mono); font-size: 11px; text-align: center; }
+.tools output { min-width: 34px; color: var(--faint); font-family: var(--mono); font-size: 11px; text-align: center; }
 
 .minimap { position: absolute; right: 14px; bottom: 14px; z-index: 10; }
 
@@ -243,6 +252,9 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
 .inspector > header svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .inspector h3 { font-family: var(--display); font-size: 26px; font-weight: 400; line-height: 1.1; }
 .inspector .muted { color: var(--muted); }
+.linked { display: flex; flex-wrap: wrap; gap: 5px; }
+.linked button { display: flex; gap: 6px; align-items: baseline; padding: 4px 10px; border-radius: 99px; font-size: 12.5px; text-align: left; }
+.linked span { color: var(--accent); font-family: var(--mono); font-size: 10px; text-transform: uppercase; }
 .details { display: flex; flex-direction: column; gap: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .details-summary { line-height: 1.5; }
 .details h4 { margin: 0 0 6px; color: var(--accent); font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -341,6 +353,14 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
 
 .actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 12px; }
 .save { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.actions > button:not(.new-project), .export > button { padding: 9px 13px; background: var(--surface); border-radius: 13px; color: var(--muted); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+.export { position: relative; }
+.export-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; display: flex; flex-direction: column; gap: 2px; width: 240px; padding: 6px; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 13px; box-shadow: 0 12px 36px rgb(0 0 0 / 0.4); }
+.export-menu button { background: none; border-color: transparent; text-align: left; }
+.export-menu button:hover:not(:disabled) { background: var(--raised); border-color: transparent; }
+.export-menu p { padding: 5px 12px; color: var(--accent); font-size: 12.5px; }
+.shared-name { padding-right: 10px; color: var(--muted); }
+.shared-missing { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 16px; }
 .new-project {
   padding: 9px 15px;
   background: var(--surface);
@@ -403,6 +423,7 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
+.card header .collapse { margin-left: auto; min-width: 26px; padding: 0 6px; background: rgb(255 255 255 / 0.06); border-color: transparent; border-radius: 7px; color: var(--ink); font-size: 11px; line-height: 1.5; }
 .card svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .card strong { display: block; font-size: 15px; font-weight: 600; line-height: 1.25; }
 .card p {
@@ -447,10 +468,10 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
   padding: 5px;
   border-radius: 13px;
 }
-.tools button { min-width: 32px; padding: 6px 9px; background: none; border-color: transparent; color: var(--muted); }
+.tools button { min-width: 28px; padding: 6px 7px; background: none; border-color: transparent; color: var(--muted); }
 .tools button:hover:not(:disabled) { color: var(--ink); background: var(--raised); border-color: transparent; }
 .tools i { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
-.tools output { min-width: 40px; color: var(--faint); font-family: var(--mono); font-size: 11px; text-align: center; }
+.tools output { min-width: 34px; color: var(--faint); font-family: var(--mono); font-size: 11px; text-align: center; }
 
 .minimap { position: absolute; right: 14px; bottom: 14px; z-index: 10; }
 
@@ -473,6 +494,9 @@ textarea { width: 100%; resize: none; line-height: 1.5; }
 .inspector > header svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .inspector h3 { font-family: var(--display); font-size: 26px; font-weight: 400; line-height: 1.1; }
 .inspector .muted { color: var(--muted); }
+.linked { display: flex; flex-wrap: wrap; gap: 5px; }
+.linked button { display: flex; gap: 6px; align-items: baseline; padding: 4px 10px; border-radius: 99px; font-size: 12.5px; text-align: left; }
+.linked span { color: var(--accent); font-family: var(--mono); font-size: 10px; text-transform: uppercase; }
 .details { display: flex; flex-direction: column; gap: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .details-summary { line-height: 1.5; }
 .details h4 { margin: 0 0 6px; color: var(--accent); font-family: var(--mono); font-size: 10.5px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; }
