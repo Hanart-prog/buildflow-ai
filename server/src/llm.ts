@@ -1,9 +1,10 @@
 import OpenAI, { toFile } from 'openai';
 import { HttpError } from './errors';
-import { EXTRACT_SYSTEM, type Complete } from './pipeline';
+import { DETAILS_SYSTEM, EXTRACT_SYSTEM, PREVIEW_SYSTEM, type Complete } from './pipeline';
 
 export type Transcribe = (audio: Buffer, mimeType: string) => Promise<string>;
-export type Llm = { complete: Complete; transcribe: Transcribe };
+// complete returns JSON; design returns free text, so it skips any JSON mode.
+export type Llm = { complete: Complete; design: Complete; transcribe: Transcribe };
 
 const AUDIO_EXTENSIONS: Record<string, string> = {
   'audio/webm': 'webm',
@@ -13,37 +14,82 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
   'audio/mpeg': 'mp3',
 };
 
-type Provider = { apiKey: string; baseURL?: string; model: string; transcribeModel: string };
+// Three screens of markup, within Groq's free limit of 8000 tokens a minute.
+const DESIGN_MAX_TOKENS = 5500;
+
+type Provider = {
+  apiKey: string;
+  baseURL?: string;
+  model: string;
+  transcribeModel: string;
+  // Sent with every completion, for what a provider supports or needs.
+  options: { reasoning_effort?: 'low' };
+  jsonOptions: { response_format?: { type: 'json_object' } };
+  rateLimitMessage: string;
+};
 
 export const openAiProvider = (apiKey: string): Provider => ({
   apiKey,
   model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
   transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1',
+  options: {},
+  jsonOptions: { response_format: { type: 'json_object' } },
+  rateLimitMessage: 'OpenAI rate limit reached. Try again shortly.',
 });
 
-// Groq has a free plan and speaks the same API as OpenAI.
+// Groq has a free plan and speaks the same API as OpenAI. Its JSON mode rejects
+// the whole reply on any slip, so validation stays in the pipeline, and low
+// reasoning effort leaves the token budget for the plan itself.
 export const groqProvider = (apiKey: string): Provider => ({
   apiKey,
   baseURL: 'https://api.groq.com/openai/v1',
   model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
   transcribeModel: process.env.GROQ_TRANSCRIBE_MODEL || 'whisper-large-v3-turbo',
+  options: { reasoning_effort: 'low' },
+  jsonOptions: {},
+  rateLimitMessage: 'Groq\'s free limit was reached. Wait a minute and try again.',
 });
 
-export function providerLlm({ apiKey, baseURL, model, transcribeModel }: Provider): Llm {
-  const client = new OpenAI({ apiKey, baseURL });
+export function providerLlm(provider: Provider): Llm {
+  const { apiKey, baseURL, model, transcribeModel, options, jsonOptions, rateLimitMessage } = provider;
+  const client = new OpenAI({ apiKey, baseURL, maxRetries: 1 });
 
-  return {
-    async complete(system, user) {
-      const response = await client.chat.completions.create({
+  const generate = async (
+    system: string,
+    user: string,
+    onDelta: ((delta: string) => void) | undefined,
+    extra: Provider['jsonOptions'] & { max_completion_tokens?: number },
+  ) => {
+    try {
+      const stream = await client.chat.completions.create({
         model,
-        response_format: { type: 'json_object' },
+        stream: true,
+        ...options,
+        ...extra,
         messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
       });
-      return response.choices[0]?.message.content ?? '';
-    },
+      let reply = '';
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta?.content ?? '';
+        reply += delta;
+        if (delta) onDelta?.(delta);
+      }
+      return reply;
+    } catch (error) {
+      if (error instanceof OpenAI.APIError && error.status === 429) {
+        throw new HttpError(429, rateLimitMessage);
+      }
+      throw error;
+    }
+  };
+
+  return {
+    complete: (system, user, onDelta) => generate(system, user, onDelta, jsonOptions),
+    design: (system, user, onDelta) =>
+      generate(system, user, onDelta, { max_completion_tokens: DESIGN_MAX_TOKENS }),
 
     async transcribe(audio, mimeType) {
       const baseType = mimeType.split(';')[0];
@@ -59,7 +105,7 @@ const unavailable = async (): Promise<never> => {
   throw new HttpError(503, 'Add GROQ_API_KEY (free) or OPENAI_API_KEY to .env, or set DEMO_MODE=true to try the canned demo.');
 };
 
-export const missingKeyLlm: Llm = { complete: unavailable, transcribe: unavailable };
+export const missingKeyLlm: Llm = { complete: unavailable, design: unavailable, transcribe: unavailable };
 
 const DEMO_SPEECH =
   'I want a recipe sharing app where people can post recipes and search by ingredient. It has to work on phones, and maybe we add meal planning later.';
@@ -70,6 +116,11 @@ const DEMO_REQUIREMENTS = {
     { id: 'req-ingredient-search', text: 'Users can search recipes by ingredient.', type: 'functional' },
     { id: 'req-mobile', text: 'The app must work well on phones.', type: 'non-functional' },
     { id: 'req-meal-planning', text: 'Should meal planning be part of a later release?', type: 'open-question' },
+  ],
+  questions: [
+    { id: 'q-stack', topic: 'Tech stack', text: 'What should the app be built with?', options: ['React and Node', 'Next.js', 'React Native'] },
+    { id: 'q-style', topic: 'Design', text: 'What should it feel like?', options: ['Warm and homey', 'Clean and minimal', 'Bold and playful'] },
+    { id: 'q-accounts', topic: 'Users', text: 'Do people need an account to browse recipes?', options: ['No, only to post', 'Yes, always'] },
   ],
 };
 
@@ -133,6 +184,10 @@ const DEMO_FEATURE_REQUIREMENTS = {
     { id: 'req-shopping-list', text: 'A shopping list is built from the planned meals.', type: 'functional' },
     { id: 'req-plan-sharing', text: 'Should households be able to share a meal plan?', type: 'open-question' },
   ],
+  questions: [
+    { id: 'q-week-start', topic: 'Design', text: 'Should the planner show a week or a month?', options: ['One week', 'One month'] },
+    { id: 'q-diet', topic: 'Data', text: 'Should plans respect dietary needs?', options: ['Yes', 'Not yet'] },
+  ],
 };
 
 const DEMO_FEATURE_BOARDS = {
@@ -174,14 +229,40 @@ const DEMO_FEATURE_BOARDS = {
   },
 };
 
+const DEMO_DETAILS = {
+  summary: 'This part of the plan carries one clear responsibility in the recipe app. It exists so that each requirement has an obvious owner.',
+  sections: [
+    { title: 'Responsibilities', items: ['Own its data and rules', 'Expose a small, stable interface'] },
+    { title: 'Tech stack', items: ['TypeScript on Node 20', 'PostgreSQL for storage'] },
+    { title: 'Risks', items: ['Ingredient search quality on large catalogues'] },
+  ],
+};
+
+const DEMO_PALETTE = '<style>:root{--brand:#c8452b;--accent:#f2a33c;--bg:#fff8ef;--ink:#2b1a10;--muted:#8d6a52}</style>';
+
+const demoScreen = (title: string, body: string) =>
+  `${DEMO_PALETTE}<div class="hero"><h1>${title}</h1></div><div class="body">${body}</div>`;
+
+const DEMO_PREVIEW = `<!-- screen: Discover | mobile -->
+${demoScreen('🍅 What can I cook?', '<div class="card row"><div class="photo">🍅</div><div class="grow"><h3>Smoky tomato orzo</h3><p class="muted">Tomato, orzo, paprika · 25 min</p></div></div><div class="card row"><div class="photo">🍋</div><div class="grow"><h3>Lemon herb chicken</h3><p class="muted">Chicken, lemon, thyme · 40 min</p></div></div>')}
+<!-- screen: Recipe | mobile -->
+${demoScreen('Smoky tomato orzo', '<div class="photo wide">🍝</div><div class="card">Toast the orzo in butter until golden, then add the tomatoes.</div><p class="muted">Saved by 214 home cooks</p>')}`;
+
 // Runs the real pipeline on canned model replies, so the app works without a key.
 export const demoLlm: Llm = {
-  complete: async (system, user) => {
+  complete: async (system, user, onDelta) => {
+    if (system === DETAILS_SYSTEM) return JSON.stringify(DEMO_DETAILS);
     const feature = JSON.parse(user).scope === 'feature';
     if (system === EXTRACT_SYSTEM) {
       return JSON.stringify(feature ? DEMO_FEATURE_REQUIREMENTS : DEMO_REQUIREMENTS);
     }
-    return JSON.stringify(feature ? DEMO_FEATURE_BOARDS : DEMO_BOARDS);
+    const reply = JSON.stringify(feature ? DEMO_FEATURE_BOARDS : DEMO_BOARDS);
+    onDelta?.(reply);
+    return reply;
+  },
+  design: async (system, _user, onDelta) => {
+    if (system === PREVIEW_SYSTEM) onDelta?.(DEMO_PREVIEW);
+    return DEMO_PREVIEW;
   },
   transcribe: async () => DEMO_SPEECH,
 };

@@ -1,11 +1,11 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { z, ZodError } from 'zod';
-import { planSchema, scopeSchema, type GenerateEvent } from '../../shared/plan';
+import { planSchema, scopeSchema, type GenerateEvent, type PreviewEvent } from '../../shared/plan';
 import type { Store } from './db';
 import { HttpError } from './errors';
 import type { Llm } from './llm';
-import { runPipeline } from './pipeline';
+import { runDetails, runPipeline, runPreview } from './pipeline';
 
 const createSchema = z.object({ name: z.string().trim().min(1).max(120) });
 const updateSchema = z.object({
@@ -15,6 +15,11 @@ const updateSchema = z.object({
 const generateSchema = z.object({
   text: z.string().trim().min(1),
   scope: scopeSchema.default('project'),
+  source: z.string().max(20000).optional(),
+});
+const detailsSchema = z.object({
+  board: z.enum(['system', 'features', 'roadmap']),
+  nodeId: z.string().min(1),
 });
 
 // OpenAI's transcription endpoint rejects files over 25 MB.
@@ -60,19 +65,22 @@ export function createApp(store: Store, llm: Llm) {
   });
 
   app.post('/api/projects/:id/generate', async (req, res) => {
-    const { text, scope } = generateSchema.parse(req.body);
+    const { text, scope, source } = generateSchema.parse(req.body);
     const project = await findProject(req.params.id);
-    const send = (event: GenerateEvent) => res.write(`${JSON.stringify(event)}\n`);
+    const send = (event: GenerateEvent) => {
+      if (!res.headersSent) res.type('application/x-ndjson');
+      res.write(`${JSON.stringify(event)}\n`);
+    };
 
     // Nothing is written until the first model call succeeds, so early failures
     // still reach the error handler as a normal status code.
     try {
       const plan = await runPipeline(text, project.plan, llm.complete, {
         scope,
-        onRequirements: (requirements) => {
-          res.type('application/x-ndjson');
-          send({ type: 'requirements', requirements });
-        },
+        source,
+        onRequirements: (requirements, questions) =>
+          send({ type: 'requirements', requirements, questions }),
+        onItem: send,
       });
       const transcript = project.transcript ? `${project.transcript}\n\n${text}` : text;
       const updated = await store.update(project.id, { plan, transcript });
@@ -83,6 +91,38 @@ export function createApp(store: Store, llm: Llm) {
       if (!res.headersSent) throw error;
       console.error(error);
       send({ type: 'error', error: error instanceof Error ? error.message : 'Generation failed' });
+      res.end();
+    }
+  });
+
+  // The client saves the result with the node, since it owns the live board.
+  app.post('/api/projects/:id/details', async (req, res) => {
+    const { board, nodeId } = detailsSchema.parse(req.body);
+    const project = await findProject(req.params.id);
+    const node = project.plan.boards[board].nodes.find((n) => n.id === nodeId);
+    if (!node) throw new HttpError(404, 'Node not found');
+    res.json(await runDetails(project, board, node, llm.complete));
+  });
+
+  app.post('/api/projects/:id/preview', async (req, res) => {
+    const project = await findProject(req.params.id);
+    const send = (event: PreviewEvent) => {
+      if (!res.headersSent) res.type('application/x-ndjson');
+      res.write(`${JSON.stringify(event)}\n`);
+    };
+
+    try {
+      const preview = await runPreview(project.name, project.plan, llm.design, (text) =>
+        send({ type: 'delta', text }),
+      );
+      const updated = await store.update(project.id, { plan: { ...project.plan, preview } });
+      if (!updated) throw new HttpError(404, 'Project not found');
+      send({ type: 'done', project: updated });
+      res.end();
+    } catch (error) {
+      if (!res.headersSent) throw error;
+      console.error(error);
+      send({ type: 'error', error: error instanceof Error ? error.message : 'Preview failed' });
       res.end();
     }
   });

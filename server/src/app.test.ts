@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { emptyPlan, type GenerateEvent, type Project } from '../../shared/plan';
+import { emptyPlan, parseScreens, type GenerateEvent, type PreviewEvent, type Project } from '../../shared/plan';
 import { createApp } from './app';
 import { openStore, type Store } from './db';
 import { demoLlm, missingKeyLlm } from './llm';
@@ -90,7 +90,12 @@ describe('projects API', () => {
   it('streams requirements before the finished plan', async () => {
     const project = await newProject();
     const events = await generate(`${base}/projects/${project.id}/generate`, { text: 'idea' });
-    expect(events.map((e) => e.type)).toEqual(['requirements', 'done']);
+    const types = events.map((e) => e.type);
+    expect(types[0]).toBe('requirements');
+    expect(types).toContain('node');
+    expect(types).toContain('edge');
+    expect(types.at(-1)).toBe('done');
+    expect(types.indexOf('node')).toBeLessThan(types.indexOf('edge'));
   });
 
   it('extends an existing plan with a feature and links it in', async () => {
@@ -101,6 +106,36 @@ describe('projects API', () => {
 
     expect(after.plan.boards.system.nodes.length).toBeGreaterThan(before.plan.boards.system.nodes.length);
     expect(after.plan.boards.system.edges.map((e) => e.id)).toContain('planner-service->api');
+  });
+
+  it('asks questions, and treats answers as decisions on the next build', async () => {
+    const project = await newProject();
+    const url = `${base}/projects/${project.id}/generate`;
+    const first = finished(await generate(url, { text: 'idea' }));
+    expect(first.plan.questions.length).toBeGreaterThan(0);
+
+    const answered = first.plan.questions.map((q, i) => (i === 0 ? { ...q, answer: 'Next.js' } : q));
+    await send(`${base}/projects/${project.id}`, 'PUT', { plan: { ...first.plan, questions: answered } });
+    const second = finished(await generate(url, { text: 'more' }));
+
+    expect(second.plan.questions[0]).toMatchObject({ answer: 'Next.js', used: true });
+    expect(second.plan.questions.filter((q) => q.used)).toHaveLength(1);
+  });
+
+  it('accepts files from an existing product', async () => {
+    const project = await newProject();
+    const events = await generate(`${base}/projects/${project.id}/generate`, { text: 'Map it', source: 'README' });
+    expect(finished(events).plan.requirements.length).toBeGreaterThan(0);
+  });
+
+  it('writes details for a node, and 404s for an unknown one', async () => {
+    const project = await newProject();
+    finished(await generate(`${base}/projects/${project.id}/generate`, { text: 'idea' }));
+    const url = `${base}/projects/${project.id}/details`;
+
+    const details = await (await send(url, 'POST', { board: 'system', nodeId: 'api' })).json();
+    expect(details.sections.length).toBeGreaterThan(0);
+    expect((await send(url, 'POST', { board: 'system', nodeId: 'nope' })).status).toBe(404);
   });
 
   it('rejects an unknown scope', async () => {
@@ -125,8 +160,27 @@ describe('projects API', () => {
     flaky.close();
 
     expect(events.map((e) => e.type)).toEqual(['requirements', 'error']);
+    expect(events.at(-1)).toMatchObject({ error: 'model down' });
     const stored: Project = await (await fetch(`${base}/projects/${project.id}`)).json();
     expect(stored.plan).toEqual(emptyPlan());
+  });
+
+  it('streams mockup screens and saves them with the plan', async () => {
+    const project = await newProject();
+    const res = await send(`${base}/projects/${project.id}/preview`, 'POST');
+    const events: PreviewEvent[] = (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
+
+    expect(events[0].type).toBe('delta');
+    const last = events.at(-1);
+    if (last?.type !== 'done') throw new Error('Preview did not finish');
+    expect(parseScreens(last.project.plan.preview).map((s) => s.name)).toEqual(['Discover', 'Recipe']);
+  });
+
+  it('keeps the preview when the plan is extended', async () => {
+    const project = await newProject();
+    await send(`${base}/projects/${project.id}/preview`, 'POST');
+    const after = finished(await generate(`${base}/projects/${project.id}/generate`, { text: 'idea' }));
+    expect(after.plan.preview).toContain('Discover');
   });
 
   it('transcribes uploaded audio', async () => {
