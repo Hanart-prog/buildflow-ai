@@ -147,7 +147,8 @@ button.brand:disabled { opacity: 1; }
 .account > button { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; background: var(--raised); border-color: transparent; font-size: 13px; }
 .account-menu { left: auto; right: 0; width: 260px; }
 .account-menu p { padding: 7px 13px 9px; overflow: hidden; color: var(--muted); font-size: 12.5px; text-overflow: ellipsis; }
-.project-menu .danger { margin-top: 5px; border-radius: 0 0 11px 11px; box-shadow: 0 -1px 0 var(--line); }
+.project-actions { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; padding-top: 6px; border-top: 1px solid var(--line); }
+.project-actions input { width: 100%; padding: 6px 12px; font-size: 12.5px; }
 
 .tabs { grid-column: 2; }
 .tabs button { background: none; border-color: transparent; color: var(--muted); }
@@ -157,7 +158,7 @@ button.brand:disabled { opacity: 1; }
 
 .actions { grid-column: 3; justify-self: end; display: flex; align-items: center; gap: 12px; }
 .save { color: var(--muted); font-family: var(--mono); font-size: 11px; }
-.actions > button:not(.new-project), .export > button { padding: 9px 13px; background: var(--surface); color: var(--muted); }
+.actions > button:not(.primary), .export > button { padding: 9px 13px; background: var(--surface); color: var(--muted); }
 .export { position: relative; }
 .export-menu { position: absolute; top: calc(100% + 8px); right: 0; z-index: 30; display: flex; flex-direction: column; gap: 2px; width: 240px; padding: 6px; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 16px; }
 .export-menu button { background: none; border-color: transparent; text-align: left; }
@@ -166,15 +167,6 @@ button.brand:disabled { opacity: 1; }
 .export-menu p { padding: 5px 12px; color: var(--accent); font-size: 12.5px; }
 .shared-name { padding-right: 10px; color: var(--muted); }
 .shared-missing { display: grid; place-items: center; height: 100%; color: var(--muted); font-size: 16px; }
-.new-project {
-  padding: 9px 16px;
-  background: var(--accent);
-  border-color: transparent;
-  color: var(--accent-ink);
-  font-weight: 500;
-  white-space: nowrap;
-}
-.new-project:hover:not(:disabled) { opacity: 0.82; border-color: transparent; }
 .theme-toggle { display: grid; place-items: center; width: 36px; height: 36px; padding: 0; color: var(--muted); }
 .theme-toggle svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -325,9 +317,12 @@ button.brand:disabled { opacity: 1; }
   pointer-events: none;
 }
 .rail > * { pointer-events: auto; }
-.notes-toggle { background: var(--surface); border-color: var(--line); color: var(--muted); }
-.notes-toggle.active { color: var(--ink); border-color: var(--line-strong); }
-.notes-toggle span { margin-left: 5px; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.rail-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.rail-toggles button { background: var(--surface); border-color: var(--line); color: var(--muted); white-space: nowrap; }
+.rail-toggles button.active { color: var(--ink); border-color: var(--line-strong); }
+.rail-toggles span { margin-left: 5px; color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.rail-toggles .asking { background: var(--disabled); border-color: transparent; color: var(--ink); }
+.rail-toggles .asking span { color: var(--ink); }
 .rail-panel {
   width: 100%;
   max-height: 100%;
@@ -408,11 +403,18 @@ button.brand:disabled { opacity: 1; }
 .hero-copy p { max-width: 640px; margin: 18px auto 0; color: var(--muted); font-size: 17px; line-height: 1.45; }
 
 .actions > button.primary { padding: 9px 16px; background: var(--action); color: var(--action-ink); white-space: nowrap; }
-.auth-dialog { width: min(400px, calc(100vw - 28px)); padding: 0; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 22px; color: var(--ink); animation: rise 200ms ease-out; }
-.auth-dialog::backdrop { background: rgba(23, 21, 19, 0.45); backdrop-filter: blur(3px); animation: fade 200ms ease-out; }
-.auth { position: relative; display: flex; flex-direction: column; gap: 12px; padding: 26px; }
-.auth h2 { padding-right: 28px; font-family: var(--display); font-size: 30px; font-weight: 400; letter-spacing: -0.02em; line-height: 1.1; }
-.auth-close { position: absolute; top: 18px; right: 16px; padding: 0 9px; background: none; border-color: transparent; color: var(--muted); font-size: 19px; line-height: 1.4; }
+.modal { width: min(400px, calc(100vw - 28px)); padding: 0; background: var(--surface-solid); border: 1px solid var(--line); border-radius: 22px; color: var(--ink); animation: rise 200ms ease-out; }
+.modal::backdrop { background: rgba(23, 21, 19, 0.45); backdrop-filter: blur(3px); animation: fade 200ms ease-out; }
+.modal-body { position: relative; padding: 26px; }
+.modal-close { position: absolute; top: 18px; right: 16px; padding: 0 9px; background: none; border-color: transparent; color: var(--muted); font-size: 19px; line-height: 1.4; }
+.modal h2 { padding-right: 28px; font-family: var(--display); font-size: 30px; font-weight: 400; letter-spacing: -0.02em; line-height: 1.1; }
+.auth { display: flex; flex-direction: column; gap: 12px; }
+.start { width: min(600px, calc(100vw - 28px)); }
+.start .modal-body { display: flex; flex-direction: column; gap: 12px; }
+.start p { color: var(--muted); font-size: 13px; line-height: 1.45; }
+.start .start-note { padding: 8px 12px; background: var(--external); border-radius: 12px; color: var(--ink); }
+.start pre { max-height: 300px; margin: 0; padding: 14px; overflow: auto; background: var(--raised); border-radius: 13px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; }
+.start .primary { align-self: flex-end; }
 .auth label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
 .auth input { padding: 10px 14px; color: var(--ink); font-size: 14px; }
 .auth small { color: var(--faint); font-size: 11.5px; }
@@ -432,6 +434,11 @@ button.brand:disabled { opacity: 1; }
 .composer textarea { padding: 4px 2px; background: none; border: 0; font-size: 15px; }
 .composer textarea:focus-visible { outline: none; }
 .composer:focus-within { border-color: var(--line-strong); }
+.composer.compact { width: min(380px, 100%); margin: 0 auto; padding: 6px 14px 6px 7px; }
+.composer.compact textarea { overflow: hidden; white-space: nowrap; }
+.composer.compact .composer-actions { display: none; }
+.composer.compact .orb { width: 36px; height: 36px; }
+.composer.compact .orb svg { width: 17px; height: 17px; }
 .composer-actions { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 10px; }
 .composer-actions .primary { margin-left: auto; }
 .focus-chip { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 4px 3px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
@@ -452,6 +459,13 @@ button.brand:disabled { opacity: 1; }
   pointer-events: none;
 }
 
+.dock.hero.returning .dock-main { min-height: 0; padding-top: 9vh; }
+.recent { width: min(1120px, 100%); margin: 0 auto; padding: 48px 0 56px; }
+.recent h2 { margin-bottom: 16px; font-family: var(--display); font-size: 27px; font-weight: 400; letter-spacing: -0.02em; }
+.recent div { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.recent button { display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 16px 18px; background: var(--surface); border-radius: 15px; text-align: left; text-transform: none; }
+.recent strong { overflow: hidden; font-family: var(--display); font-size: 21px; font-weight: 400; letter-spacing: -0.02em; line-height: 1.15; text-overflow: ellipsis; white-space: nowrap; }
+.recent span { color: var(--faint); font-size: 12px; }
 .how { width: min(1120px, 100%); margin: 0 auto; padding-bottom: 56px; }
 .how > h2 { padding: 22px 0 28px; font-family: var(--display); font-size: clamp(32px, 3.6vw, 46px); font-weight: 400; letter-spacing: -0.02em; line-height: 1.05; text-align: center; }
 .how-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; overflow: hidden; background: var(--line); border: 1px solid var(--line); border-radius: 18px; }
@@ -588,20 +602,20 @@ button.brand:disabled { opacity: 1; }
 
 @media (max-width: 900px) {
   .tools button:nth-of-type(n + 3), .tools output, .tools i { display: none; }
-  .tools { bottom: 180px; }
+  .tools { bottom: 78px; }
   .inspector { left: 14px; width: auto; }
-  .rail { right: 14px; width: auto; bottom: 180px; }
+  .rail { right: 14px; width: auto; bottom: 130px; }
   .how-grid { grid-template-columns: 1fr; }
   .how-grid article { padding: 18px; }
 }
 
 @media (max-width: 520px) {
-  .new-project { display: none; }
   .topbar { gap: 6px; padding: 0 14px; }
   .brand { padding-right: 6px; font-size: 21px; }
   .actions { gap: 6px; }
-  .actions > button:not(.new-project), .export > button { padding: 8px 10px; }
+  .actions > button:not(.primary), .export > button { padding: 8px 10px; }
   .projects > button { padding: 7px 8px 7px 10px; }
-  .actions .undo { position: fixed; top: 118px; right: 14px; }
   .project-menu { position: fixed; top: 58px; left: 14px; width: calc(100vw - 28px); }
+  .start-building { position: fixed; top: 118px; right: 14px; z-index: 12; }
+  .rail-toggles { max-width: calc(100% - 150px); }
 }

@@ -55,7 +55,7 @@ export const toBoard = (json: WorkflowJSON): Board => ({
 const fitMargins = () => ({
   top: 96,
   right: document.querySelector('.inspector') ? 400 : 40,
-  bottom: 170,
+  bottom: document.querySelector('.composer.compact') ? 90 : 170,
   left: window.innerWidth > 900 && document.querySelector('.rail-panel') ? 345 : 30,
 });
 

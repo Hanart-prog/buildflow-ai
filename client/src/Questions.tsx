@@ -7,10 +7,11 @@ type Props = {
   onAnswer: (id: string, answer: string) => void;
   onSkip: (id: string) => void;
   onDismiss: () => void;
+  onClose: () => void;
   onApply: () => void;
 };
 
-export function Questions({ questions, busy, onAnswer, onSkip, onDismiss, onApply }: Props) {
+export function Questions({ questions, busy, onAnswer, onSkip, onDismiss, onClose, onApply }: Props) {
   const [typed, setTyped] = useState('');
   const current = questions.find((q) => !q.answer);
 
@@ -43,7 +44,7 @@ export function Questions({ questions, busy, onAnswer, onSkip, onDismiss, onAppl
         <span>
           {current.topic} · {questions.indexOf(current) + 1} of {questions.length}
         </span>
-        <button aria-label="Close questions" onClick={onDismiss}>
+        <button aria-label="Close questions" onClick={onClose}>
           ×
         </button>
       </header>

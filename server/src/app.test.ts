@@ -49,8 +49,8 @@ const finished = (events: GenerateEvent[]): Project => {
 
 beforeAll(async () => {
   store = await openStore();
-  server = createApp(store, demoLlm).listen(0);
-  keylessServer = createApp(store, missingKeyLlm).listen(0);
+  server = createApp(store, demoLlm, { dailyBuilds: 1000 }).listen(0);
+  keylessServer = createApp(store, missingKeyLlm, { dailyBuilds: 1000 }).listen(0);
   base = urlOf(server);
   keylessBase = urlOf(keylessServer);
   cookie = await signUp('first@example.com');
@@ -216,7 +216,7 @@ describe('projects API', () => {
         if (calls > 1) throw new Error('model down');
         return demoLlm.complete(system, user);
       },
-    }).listen(0);
+    }, { dailyBuilds: 1000 }).listen(0);
     const project = await newProject();
 
     const events = await generate(`${urlOf(flaky)}/projects/${project.id}/generate`, { text: 'idea' });
@@ -401,6 +401,44 @@ describe('accounts', () => {
     const blocked = await login('guess@example.com', 'correct horse', url);
     limited.close();
     expect(blocked.status).toBe(429);
+  });
+
+  it('names a new project from the idea only when asked', async () => {
+    const named = await newProject();
+    const kept = await newProject();
+    await generate(`${base}/projects/${named.id}/generate`, { text: 'idea', autoName: true });
+    await generate(`${base}/projects/${kept.id}/generate`, { text: 'idea' });
+    const name = async (id: string) => ((await (await send(`${base}/projects/${id}`, 'GET')).json()) as Project).name;
+    expect(await name(named.id)).toBe('Recipe Sharing App');
+    expect(await name(kept.id)).toBe('Test');
+  });
+
+  it('stops at the daily build limit, per account, and refunds failed builds', async () => {
+    const limited = createApp(store, demoLlm, { dailyBuilds: 2 }).listen(0);
+    const failing = createApp(store, missingKeyLlm, { dailyBuilds: 2 }).listen(0);
+    const url = urlOf(limited);
+    const session = await signUp('limit@example.com', url);
+    const other = await signUp('roomy@example.com', url);
+    const made = async (as: string): Promise<Project> =>
+      (await send(`${url}/projects`, 'POST', { name: 'Limited' }, as)).json();
+    const project = await made(session);
+    const build = (target = url) =>
+      send(`${target}/projects/${project.id}/generate`, 'POST', { text: 'idea' }, session);
+
+    expect((await build(urlOf(failing))).status).toBe(503);
+    const first = await build();
+    await first.text();
+    const second = await build();
+    await second.text();
+    const third = await build();
+    const theirs = await made(other);
+    const unaffected = await send(`${url}/projects/${theirs.id}/generate`, 'POST', { text: 'idea' }, other);
+    await unaffected.text();
+    limited.close();
+    failing.close();
+
+    expect([first.status, second.status, third.status, unaffected.status]).toEqual([200, 200, 429, 200]);
+    expect((await third.json()).error).toContain('today');
   });
 
   it('still serves a shared link to someone logged out', async () => {

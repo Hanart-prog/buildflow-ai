@@ -33,6 +33,7 @@ const generateSchema = z.object({
   source: z.string().max(20000).optional(),
   focus: focusSchema.optional(),
   askQuestions: z.boolean().default(true),
+  autoName: z.boolean().default(false),
 });
 const detailsSchema = focusSchema;
 const credentialsSchema = z.object({
@@ -40,6 +41,7 @@ const credentialsSchema = z.object({
   password: z.string().min(1).max(128),
 });
 const MIN_PASSWORD = 8;
+const DAILY_BUILDS = 20;
 
 const ATTEMPT_LIMIT = 10;
 const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
@@ -64,7 +66,9 @@ function requirePassword(password: string) {
   };
 }
 
-export function createApp(store: Store, llm: Llm, { password }: { password?: string } = {}) {
+type AppOptions = { password?: string; dailyBuilds?: number };
+
+export function createApp(store: Store, llm: Llm, { password, dailyBuilds = DAILY_BUILDS }: AppOptions = {}) {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
   if (password) app.use('/api', requirePassword(password));
@@ -143,6 +147,12 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
 
   const ownerOf = (res: Response): string => res.locals.userId;
 
+  // Failed builds are refunded, so an AI outage does not use up the day.
+  const takeBuild = async (res: Response) => {
+    if (await store.takeBuild(ownerOf(res), dailyBuilds)) return;
+    throw new HttpError(429, `You have used all ${dailyBuilds} of today's builds. More tomorrow.`);
+  };
+
   // Another person's project looks exactly like one that does not exist.
   const findProject = async (id: string, res: Response) => {
     const project = await store.get(id, ownerOf(res));
@@ -198,7 +208,7 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
   });
 
   app.post('/api/projects/:id/generate', async (req, res) => {
-    const { text, scope, source, focus, askQuestions } = generateSchema.parse(req.body);
+    const { text, scope, source, focus, askQuestions, autoName } = generateSchema.parse(req.body);
     const project = await findProject(req.params.id, res);
     if (focus && !project.plan.boards[focus.board].nodes.some((n) => n.id === focus.nodeId)) {
       throw new HttpError(404, 'That node no longer exists');
@@ -207,6 +217,9 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
       if (!res.headersSent) res.type('application/x-ndjson');
       res.write(`${JSON.stringify(event)}\n`);
     };
+
+    await takeBuild(res);
+    let name: string | undefined;
 
     // Nothing is written until the first model call succeeds, so early failures
     // still reach the error handler as a normal status code.
@@ -218,14 +231,18 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
         askQuestions,
         onRequirements: (requirements, questions) =>
           send({ type: 'requirements', requirements, questions }),
+        onName: (given) => {
+          if (autoName) name = given;
+        },
         onItem: send,
       });
       const transcript = project.transcript ? `${project.transcript}\n\n${text}` : text;
-      const updated = await store.update(project.id, ownerOf(res), { plan, transcript });
+      const updated = await store.update(project.id, ownerOf(res), { plan, transcript, name });
       if (!updated) throw new HttpError(404, 'Project not found');
       send({ type: 'done', project: updated });
       res.end();
     } catch (error) {
+      await store.refundBuild(ownerOf(res));
       if (!res.headersSent) throw error;
       console.error(error);
       send({ type: 'error', error: error instanceof Error ? error.message : 'Generation failed' });
@@ -244,6 +261,7 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
 
   app.post('/api/projects/:id/preview', async (req, res) => {
     const project = await findProject(req.params.id, res);
+    await takeBuild(res);
     const send = (event: PreviewEvent) => {
       if (!res.headersSent) res.type('application/x-ndjson');
       res.write(`${JSON.stringify(event)}\n`);
@@ -258,6 +276,7 @@ export function createApp(store: Store, llm: Llm, { password }: { password?: str
       send({ type: 'done', project: updated });
       res.end();
     } catch (error) {
+      await store.refundBuild(ownerOf(res));
       if (!res.headersSent) throw error;
       console.error(error);
       send({ type: 'error', error: error instanceof Error ? error.message : 'Preview failed' });

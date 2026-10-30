@@ -31,6 +31,7 @@ export type Complete = (
 const MAX_QUESTIONS = 3;
 
 const extractionSchema = z.object({
+  name: z.string().trim().min(1).max(60).optional().catch(undefined),
   requirements: z.array(requirementSchema),
   questions: z.array(questionSchema.pick({ id: true, topic: true, text: true, options: true })).default([]),
 });
@@ -57,7 +58,8 @@ const mappingSchema = z.object({
 
 export const EXTRACT_SYSTEM = `You turn spoken brainstorming into software requirements.
 The input is JSON with "speech" (a raw transcript, possibly rambling), "scope", "knownRequirements", "decisions", "knownQuestions" and sometimes "existingProduct".
-Return only minified JSON, with no markdown or commentary: {"requirements": [{"id", "text", "type"}], "questions": [{"id", "topic", "text", "options"}]}.
+Return only minified JSON, with no markdown or commentary: {"name", "requirements": [{"id", "text", "type"}], "questions": [{"id", "topic", "text", "options"}]}.
+- "name" is a short title for the product in 2 to 4 words, such as "Tool Lending App". Never start it with words from the speech like "I want to".
 - Return only requirements that are new, never repeats of knownRequirements.
 - "type" is one of: functional, non-functional, constraint, open-question.
 - Use short kebab-case ids such as "req-offline-sync".
@@ -267,6 +269,8 @@ type PipelineOptions = {
   source?: string;
   // Called as soon as requirements are known, before the slower mapping stage.
   onRequirements?: (requirements: Requirement[], questions: Question[]) => void;
+  // Called with the title the model gave the product.
+  onName?: (name: string) => void;
   // Called with each new node and edge while the model is still writing.
   // The returned plan is the final word: a retry or the merge can differ.
   onItem?: (item: Extract<GenerateEvent, { type: 'node' | 'edge' }>) => void;
@@ -306,7 +310,7 @@ export async function runPipeline(
   speech: string,
   existing: Plan,
   complete: Complete,
-  { scope = 'project', focus, askQuestions = true, source, onRequirements, onItem }: PipelineOptions = {},
+  { scope = 'project', focus, askQuestions = true, source, onRequirements, onName, onItem }: PipelineOptions = {},
 ): Promise<Plan> {
   const focusNode = focus && existing.boards[focus.board].nodes.find((n) => n.id === focus.nodeId);
   const focusInput = focus &&
@@ -316,7 +320,7 @@ export async function runPipeline(
   const asked = existing.questions ?? [];
   const decisions = decisionsOf(asked);
 
-  const { requirements: extracted, questions: followUps } = await completeJson(
+  const { name, requirements: extracted, questions: followUps } = await completeJson(
     complete,
     EXTRACT_SYSTEM,
     JSON.stringify({
@@ -331,6 +335,8 @@ export async function runPipeline(
     }),
     extractionSchema,
   );
+
+  if (name) onName?.(name);
 
   const known = new Set(existing.requirements.map((r) => r.id));
   const requirements = [...existing.requirements, ...extracted.filter((r) => !known.has(r.id))];
