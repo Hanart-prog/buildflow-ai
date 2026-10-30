@@ -151,9 +151,14 @@ function Details({ name, node, projectId, details, onFlush, onLoaded }: DetailsP
   );
 }
 
-type InspectorProps = { name: BoardName; projectId: string; onFlush: () => Promise<void> };
+type InspectorProps = {
+  name: BoardName;
+  projectId: string;
+  onFlush: () => Promise<void>;
+  onExtend: (nodeId: string, label: string) => void;
+};
 
-function Inspector({ name, projectId, onFlush }: InspectorProps) {
+function Inspector({ name, projectId, onFlush, onExtend }: InspectorProps) {
   const selection = useService(WorkflowSelectService);
   const [node, setNode] = useState<WorkflowNodeEntity | undefined>();
   const [, redraw] = useState(0);
@@ -184,6 +189,9 @@ function Inspector({ name, projectId, onFlush }: InspectorProps) {
       </header>
       <h3>{form.getValueIn('label')}</h3>
       {form.getValueIn('description') && <p className="muted">{form.getValueIn('description')}</p>}
+      <button className="primary" onClick={() => onExtend(node.id, form.getValueIn('label'))}>
+        Build on this
+      </button>
 
       <Details
         key={node.id}
@@ -308,6 +316,7 @@ type Props = {
   projectId: string;
   // Writes pending edits, so the server sees the node a request refers to.
   onFlush: () => Promise<void>;
+  onExtend: (nodeId: string, label: string) => void;
   // Node ids to draw one at a time when the canvas opens.
   fresh: string[];
   // Filled while the canvas is open, for feeding it a plan as it is generated.
@@ -316,7 +325,17 @@ type Props = {
   onProgress: (placed: number | null) => void;
 };
 
-export function BoardCanvas({ name, board, projectId, onFlush, fresh, live, onChange, onProgress }: Props) {
+export function BoardCanvas({
+  name,
+  board,
+  projectId,
+  onFlush,
+  onExtend,
+  fresh,
+  live,
+  onChange,
+  onProgress,
+}: Props) {
   const latest = useRef({ onChange, onProgress });
   latest.current = { onChange, onProgress };
   const building = useRef(false);
@@ -436,7 +455,7 @@ export function BoardCanvas({ name, board, projectId, onFlush, fresh, live, onCh
       <FreeLayoutEditorProvider {...editorProps}>
         <EditorRenderer className="editor" />
         <Tools name={name} onTidy={onChange} />
-        <Inspector name={name} projectId={projectId} onFlush={onFlush} />
+        <Inspector name={name} projectId={projectId} onFlush={onFlush} onExtend={onExtend} />
       </FreeLayoutEditorProvider>
     </div>
   );
