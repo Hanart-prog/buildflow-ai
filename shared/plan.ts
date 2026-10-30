@@ -29,6 +29,7 @@ export const nodeSchema = z.object({
   description: z.string().default(''),
   kind: z.string().min(1),
   details: nodeDetailsSchema.optional(),
+  collapsed: z.boolean().optional(),
   x: z.number().optional(),
   y: z.number().optional(),
 });
@@ -45,8 +46,16 @@ export const boardSchema = z.object({
   edges: z.array(edgeSchema),
 });
 
+// Ties a feature to the system parts and roadmap steps that deliver it.
+export const linkSchema = z.object({
+  feature: z.string().min(1),
+  system: z.array(z.string()).default([]),
+  roadmap: z.array(z.string()).default([]),
+});
+
 export const planSchema = z.object({
   requirements: z.array(requirementSchema),
+  links: z.array(linkSchema).default([]),
   questions: z.array(questionSchema).default([]),
   boards: z.object({
     system: boardSchema,
@@ -86,6 +95,7 @@ export type ProjectSummary = {
 
 export type Project = ProjectSummary & {
   transcript: string;
+  shareId: string | null;
   plan: Plan;
 };
 
@@ -102,6 +112,45 @@ export type PreviewEvent =
   | { type: 'done'; project: Project }
   | { type: 'error'; error: string };
 
+export type LinkedNode = { board: BoardName; id: string; label: string };
+
+// The nodes on other boards tied to this one, in either direction.
+export function linkedNodes(plan: Plan, board: BoardName, id: string): LinkedNode[] {
+  const links = (plan.links ?? []).filter((link) =>
+    board === 'features' ? link.feature === id : link[board].includes(id),
+  );
+  const ids: [BoardName, string][] = links.flatMap((link) =>
+    board === 'features'
+      ? [
+          ...link.system.map((n): [BoardName, string] => ['system', n]),
+          ...link.roadmap.map((n): [BoardName, string] => ['roadmap', n]),
+        ]
+      : [['features', link.feature]],
+  );
+  const unique = [...new Map(ids.map((entry) => [entry.join(':'), entry])).values()];
+  return unique.flatMap(([linked, nodeId]) => {
+    const node = plan.boards[linked].nodes.find((n) => n.id === nodeId);
+    return node ? [{ board: linked, id: nodeId, label: node.label }] : [];
+  });
+}
+
+// Everything below a collapsed node, unless it is that node's own parent.
+export function hiddenByCollapse(board: Board) {
+  const hidden = new Set<string>();
+  const hide = (id: string) => {
+    for (const edge of board.edges) {
+      if (edge.source === id && !hidden.has(edge.target)) {
+        hidden.add(edge.target);
+        hide(edge.target);
+      }
+    }
+  };
+  board.nodes.filter((n) => n.collapsed).forEach((n) => hide(n.id));
+  return hidden;
+}
+
+export type SharedPlan = { name: string; plan: Plan };
+
 export type Screen = { name: string; device: 'mobile' | 'desktop'; html: string };
 
 const SCREEN_MARKER = /<!--\s*screen:\s*(.+?)\s*\|\s*(mobile|desktop)\s*-->/g;
@@ -117,6 +166,7 @@ export function parseScreens(preview: string): Screen[] {
 
 export const emptyPlan = (): Plan => ({
   preview: '',
+  links: [],
   questions: [],
   requirements: [],
   boards: {

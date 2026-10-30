@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { emptyPlan, parseScreens, type Plan } from '../../shared/plan';
+import { buildPrompt, planMarkdown } from '../../shared/exportPlan';
+import { emptyPlan, hiddenByCollapse, linkedNodes, parseScreens, type Plan } from '../../shared/plan';
 import { keepPaletteOnly } from '../../shared/screenKit';
 import { createBoardScanner, type ScannedItem } from './boardScanner';
-import { DETAILS_SYSTEM, EXTRACT_SYSTEM, attachToFocus, runDetails, runPipeline, runPreview, type Complete } from './pipeline';
+import { DETAILS_SYSTEM, EXTRACT_SYSTEM, attachToFocus, mergeLinks, runDetails, runPipeline, runPreview, type Complete } from './pipeline';
 
 const extraction = { requirements: [{ id: 'req-a', text: 'Users can log in.', type: 'functional' }] };
 const emptyBoard = { nodes: [], edges: [] };
@@ -184,6 +185,66 @@ describe('extending one node', () => {
     expect(inputs.map((i) => i.focus.label)).toEqual(['web', 'web']);
     expect(plan.boards.system.edges.map((e) => e.id)).toEqual(['web->api']);
     expect(plan.boards.features.edges).toEqual([]);
+  });
+});
+
+describe('plan tools', () => {
+  const node = (id: string, kind = 'service') => ({ id, label: id.toUpperCase(), description: '', kind });
+  const plan = (): Plan => {
+    const p = emptyPlan();
+    p.boards.system.nodes = [node('api')];
+    p.boards.features.nodes = [node('search', 'feature'), node('task-a', 'task')];
+    p.boards.features.edges = [{ id: 'search->task-a', source: 'search', target: 'task-a' }];
+    p.boards.roadmap.nodes = [node('beta', 'milestone')];
+    return p;
+  };
+
+  it('keeps only links whose ends exist, and combines repeats', () => {
+    const { boards } = plan();
+    const existing = [{ feature: 'search', system: ['api'], roadmap: [] }];
+    const generated = [
+      { feature: 'search', system: ['ghost', 'api'], roadmap: ['beta'] },
+      { feature: 'ghost', system: ['api'], roadmap: [] },
+    ];
+    expect(mergeLinks(existing, generated, boards)).toEqual([
+      { feature: 'search', system: ['api'], roadmap: ['beta'] },
+    ]);
+  });
+
+  it('accepts a label where the model should have written an id', () => {
+    const generated = [{ feature: 'Search', system: ['API'], roadmap: ['beta'] }];
+    expect(mergeLinks([], generated, plan().boards)).toEqual([
+      { feature: 'search', system: ['api'], roadmap: ['beta'] },
+    ]);
+  });
+
+  it('finds linked nodes from either side and tolerates older plans', () => {
+    const p = { ...plan(), links: [{ feature: 'search', system: ['api'], roadmap: ['beta'] }] };
+    expect(linkedNodes(p, 'features', 'search').map((n) => n.label)).toEqual(['API', 'BETA']);
+    expect(linkedNodes(p, 'system', 'api').map((n) => n.label)).toEqual(['SEARCH']);
+    const { links: _none, ...old } = p;
+    expect(linkedNodes(old as Plan, 'system', 'api')).toEqual([]);
+  });
+
+  it('hides everything below a collapsed node, even around a loop', () => {
+    const board = plan().boards.features;
+    board.nodes[0].collapsed = true;
+    board.edges.push({ id: 'task-a->search', source: 'task-a', target: 'search' });
+    expect([...hiddenByCollapse(board)].sort()).toEqual(['search', 'task-a']);
+  });
+
+  it('exports requirements, decisions, connections and details', () => {
+    const p = plan();
+    p.requirements = [{ id: 'r', text: 'Search works.', type: 'functional' }];
+    p.questions = [{ id: 'q', topic: 'Tech', text: 'Stack?', options: [], answer: 'Go' }];
+    p.boards.features.nodes[0].details = { summary: 'Finds things.', sections: [{ title: 'Risks', items: ['Slow'] }] };
+
+    const markdown = planMarkdown('Finder', p);
+
+    for (const text of ['# Finder', '[functional] Search works.', 'Stack? Go', '- TASK-A', 'Finds things.', '- Slow']) {
+      expect(markdown).toContain(text);
+    }
+    expect(buildPrompt('Finder', p)).toContain('You are building "Finder"');
   });
 });
 

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { SCREEN_KIT_GUIDE } from '../../shared/screenKit';
 import { createBoardScanner, type ScannedItem } from './boardScanner';
 import {
+  linkSchema,
   nodeDetailsSchema,
   nodeSchema,
   parseScreens,
@@ -51,6 +52,7 @@ const mappingSchema = z.object({
   system: modelBoardSchema,
   features: modelBoardSchema,
   roadmap: modelBoardSchema,
+  links: z.array(linkSchema).default([]),
 });
 
 export const EXTRACT_SYSTEM = `You turn spoken brainstorming into software requirements.
@@ -72,12 +74,13 @@ Return only minified JSON, with no markdown or commentary: {"requirements": [{"i
 
 export const MAP_SYSTEM = `You are a software architect turning requirements into three linked plans.
 The input is JSON with "requirements", "decisions", "scope", "existingBoards" and sometimes "focus".
-Return only minified JSON, with no markdown or commentary: {"system": Board, "features": Board, "roadmap": Board}.
+Return only minified JSON, with no markdown or commentary: {"system": Board, "features": Board, "roadmap": Board, "links": [{"feature", "system", "roadmap"}]}.
 Board is {"nodes": [{"id", "label", "description", "kind"}], "edges": [{"source", "target", "label"}]}.
 - system: the architecture. kind is one of client, service, database, external, queue. Edges are data or control flow, labelled with what passes along them.
 - features: a hierarchy. kind is one of epic, feature, task. Edges run parent to child.
 - roadmap: delivery order. kind is one of phase, milestone. Edges run prerequisite to dependent, including across phases.
 - Every requirement must be covered by at least one feature.
+- links comes last, with one entry per new feature-kind node: "feature" is its id, "system" lists the system node ids it touches and "roadmap" the roadmap node ids that ship it. Use exact node ids, never labels. These may be existing ids.
 - "decisions" are the user's settled choices. Follow them, naming chosen technology in labels and descriptions.
 - existingBoards are already saved. Return only what is new: new nodes, and edges that involve a new node. Edges may reference existing node ids.
 - If "focus" is present, the user is extending that one node. You must add at least 2 new nodes on focus.board, and every one must build on it: connect the new top-level nodes from focus.id. On the other boards, add only what this extension needs.
@@ -165,6 +168,28 @@ export function mergeBoard(existing: Board, generated: z.infer<typeof modelBoard
   }
 
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
+}
+
+// Links only stay if every end still exists, since models invent ids or write
+// a node's label where its id belongs.
+export function mergeLinks(existing: Plan['links'], generated: Plan['links'], boards: Plan['boards']) {
+  const resolve = (board: BoardName, value: string) =>
+    boards[board].nodes.find((n) => n.id === value || n.label.toLowerCase() === value.toLowerCase())?.id;
+  const resolved = (board: BoardName, values: string[]) =>
+    values.flatMap((value) => resolve(board, value) ?? []);
+
+  const merged = new Map(existing.map((link) => [link.feature, link]));
+  for (const link of generated) {
+    const feature = resolve('features', link.feature);
+    if (!feature) continue;
+    const known = merged.get(feature);
+    merged.set(feature, {
+      feature,
+      system: [...new Set([...(known?.system ?? []), ...resolved('system', link.system)])],
+      roadmap: [...new Set([...(known?.roadmap ?? []), ...resolved('roadmap', link.roadmap)])],
+    });
+  }
+  return [...merged.values()];
 }
 
 const withoutLayout = (board: Board) => ({
@@ -344,5 +369,5 @@ export async function runPipeline(
     boards[focus.board] = attachToFocus(existing.boards[focus.board], boards[focus.board], focus.nodeId);
   }
 
-  return { ...existing, requirements, questions, boards };
+  return { ...existing, requirements, questions, boards, links: mergeLinks(existing.links ?? [], mapped.links, boards) };
 }
