@@ -113,9 +113,61 @@ const DEMO_BOARDS = {
   },
 };
 
+const DEMO_FEATURE_REQUIREMENTS = {
+  requirements: [
+    { id: 'req-meal-plan', text: 'Users can plan meals for the week from saved recipes.', type: 'functional' },
+    { id: 'req-shopping-list', text: 'A shopping list is built from the planned meals.', type: 'functional' },
+    { id: 'req-plan-sharing', text: 'Should households be able to share a meal plan?', type: 'open-question' },
+  ],
+};
+
+const DEMO_FEATURE_BOARDS = {
+  system: {
+    nodes: [
+      { id: 'planner-service', label: 'Meal Planner Service', description: 'Weekly plans and shopping lists', kind: 'service' },
+      { id: 'plans-db', label: 'Plans Database', description: 'Meals per day, per user', kind: 'database' },
+      { id: 'reminders', label: 'Reminder Queue', description: 'Sends the weekly shopping list', kind: 'queue' },
+    ],
+    edges: [
+      { source: 'web-client', target: 'planner-service', label: 'plans' },
+      { source: 'planner-service', target: 'api', label: 'recipe lookups' },
+      { source: 'planner-service', target: 'plans-db', label: 'meal plans' },
+      { source: 'planner-service', target: 'reminders', label: 'weekly digest' },
+    ],
+  },
+  features: {
+    nodes: [
+      { id: 'epic-planning', label: 'Meal Planning', description: '', kind: 'epic' },
+      { id: 'feat-calendar', label: 'Weekly Calendar', description: 'Covers req-meal-plan', kind: 'feature' },
+      { id: 'feat-shopping', label: 'Shopping List', description: 'Covers req-shopping-list', kind: 'feature' },
+      { id: 'task-drag-recipes', label: 'Drag Recipes Onto Days', description: '', kind: 'task' },
+    ],
+    edges: [
+      { source: 'epic-planning', target: 'feat-calendar' },
+      { source: 'epic-planning', target: 'feat-shopping' },
+      { source: 'feat-calendar', target: 'task-drag-recipes' },
+    ],
+  },
+  roadmap: {
+    nodes: [
+      { id: 'ms-calendar', label: 'Calendar Beta', description: '', kind: 'milestone' },
+      { id: 'ms-shopping', label: 'Shopping Lists Live', description: '', kind: 'milestone' },
+    ],
+    edges: [
+      { source: 'ms-search', target: 'ms-calendar' },
+      { source: 'ms-calendar', target: 'ms-shopping' },
+    ],
+  },
+};
+
 // Runs the real pipeline on canned model replies, so the app works without a key.
 export const demoLlm: Llm = {
-  complete: async (system) =>
-    JSON.stringify(system === EXTRACT_SYSTEM ? DEMO_REQUIREMENTS : DEMO_BOARDS),
+  complete: async (system, user) => {
+    const feature = JSON.parse(user).scope === 'feature';
+    if (system === EXTRACT_SYSTEM) {
+      return JSON.stringify(feature ? DEMO_FEATURE_REQUIREMENTS : DEMO_REQUIREMENTS);
+    }
+    return JSON.stringify(feature ? DEMO_FEATURE_BOARDS : DEMO_BOARDS);
+  },
   transcribe: async () => DEMO_SPEECH,
 };

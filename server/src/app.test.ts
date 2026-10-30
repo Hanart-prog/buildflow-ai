@@ -1,6 +1,6 @@
 import type { Server } from 'node:http';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { emptyPlan, type Project } from '../../shared/plan';
+import { emptyPlan, type GenerateEvent, type Project } from '../../shared/plan';
 import { createApp } from './app';
 import { openStore, type Store } from './db';
 import { demoLlm, missingKeyLlm } from './llm';
@@ -26,6 +26,17 @@ const send = (url: string, method: string, body?: unknown) =>
 
 const newProject = async (): Promise<Project> =>
   (await send(`${base}/projects`, 'POST', { name: 'Test' })).json();
+
+const generate = async (url: string, body: unknown): Promise<GenerateEvent[]> => {
+  const res = await send(url, 'POST', body);
+  return (await res.text()).trim().split('\n').map((line) => JSON.parse(line));
+};
+
+const finished = (events: GenerateEvent[]): Project => {
+  const last = events.at(-1);
+  if (last?.type !== 'done') throw new Error(`Stream did not finish: ${JSON.stringify(last)}`);
+  return last.project;
+};
 
 beforeAll(async () => {
   store = await openStore();
@@ -67,13 +78,55 @@ describe('projects API', () => {
     const project = await newProject();
     const url = `${base}/projects/${project.id}/generate`;
 
-    const first: Project = await (await send(url, 'POST', { text: 'first idea' })).json();
+    const first = finished(await generate(url, { text: 'first idea' }));
     expect(first.plan.requirements.length).toBeGreaterThan(0);
     expect(first.plan.boards.system.edges.length).toBeGreaterThan(0);
 
-    const second: Project = await (await send(url, 'POST', { text: 'second idea' })).json();
+    const second = finished(await generate(url, { text: 'second idea' }));
     expect(second.transcript).toBe('first idea\n\nsecond idea');
     expect(second.plan.boards.system.nodes).toHaveLength(first.plan.boards.system.nodes.length);
+  });
+
+  it('streams requirements before the finished plan', async () => {
+    const project = await newProject();
+    const events = await generate(`${base}/projects/${project.id}/generate`, { text: 'idea' });
+    expect(events.map((e) => e.type)).toEqual(['requirements', 'done']);
+  });
+
+  it('extends an existing plan with a feature and links it in', async () => {
+    const project = await newProject();
+    const url = `${base}/projects/${project.id}/generate`;
+    const before = finished(await generate(url, { text: 'the product' }));
+    const after = finished(await generate(url, { text: 'meal planning', scope: 'feature' }));
+
+    expect(after.plan.boards.system.nodes.length).toBeGreaterThan(before.plan.boards.system.nodes.length);
+    expect(after.plan.boards.system.edges.map((e) => e.id)).toContain('planner-service->api');
+  });
+
+  it('rejects an unknown scope', async () => {
+    const project = await newProject();
+    const res = await send(`${base}/projects/${project.id}/generate`, 'POST', { text: 'x', scope: 'nope' });
+    expect(res.status).toBe(400);
+  });
+
+  it('reports a failure after streaming has started, and keeps the plan unchanged', async () => {
+    let calls = 0;
+    const flaky = createApp(store, {
+      ...demoLlm,
+      complete: async (system, user) => {
+        calls += 1;
+        if (calls > 1) throw new Error('model down');
+        return demoLlm.complete(system, user);
+      },
+    }).listen(0);
+    const project = await newProject();
+
+    const events = await generate(`${urlOf(flaky)}/projects/${project.id}/generate`, { text: 'idea' });
+    flaky.close();
+
+    expect(events.map((e) => e.type)).toEqual(['requirements', 'error']);
+    const stored: Project = await (await fetch(`${base}/projects/${project.id}`)).json();
+    expect(stored.plan).toEqual(emptyPlan());
   });
 
   it('transcribes uploaded audio', async () => {
