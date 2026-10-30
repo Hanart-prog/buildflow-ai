@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { buildPrompt, planMarkdown } from '../../shared/exportPlan';
+import { planMarkdown } from '../../shared/exportPlan';
 import type { Project } from '../../shared/plan';
 import { api } from './api';
 
@@ -36,8 +36,6 @@ export function ExportMenu({ project, onFlush, onError }: Props) {
     setNote('Downloaded');
   });
 
-  const copyPrompt = attempt(() => copy(buildPrompt(project.name, project.plan), 'Prompt copied'));
-
   const share = attempt(async () => {
     const { shareId: id } = await api.share(project.id);
     setShareId(id);
@@ -64,7 +62,6 @@ export function ExportMenu({ project, onFlush, onError }: Props) {
       {open && (
         <div className="export-menu">
           <button onClick={download}>Download Markdown</button>
-          <button onClick={copyPrompt}>Copy prompt for a coding tool</button>
           <button onClick={share}>{shareId ? 'Copy view-only link' : 'Create view-only link'}</button>
           {shareId && <button onClick={unshare}>Turn off link</button>}
           {note && <p role="status">{note}</p>}

@@ -266,7 +266,7 @@ function Inspector({ name, plan, projectId, onFlush, onExtend, onJump }: Inspect
 
       {projectId && (
         <details className="edit-node">
-          <summary>Edit this node</summary>
+          <summary>Edit this card</summary>
           <label>
             Label
             <input value={form.getValueIn('label')} onChange={(e) => set('label', e.target.value)} />
@@ -320,7 +320,7 @@ function Tools({ name, readOnly, onTidy }: { name: BoardName; readOnly: boolean;
     const node = ctx.document.createWorkflowNodeByType(
       NODE_TYPE,
       { x: center.x, y: center.y - NODE_HEIGHT / 2 },
-      { data: { label: 'New node', description: '', kind: KINDS[name][0] } },
+      { data: { label: 'New card', description: '', kind: KINDS[name][0] } },
     );
     ctx.selection.selection = [node];
   };
@@ -339,7 +339,7 @@ function Tools({ name, readOnly, onTidy }: { name: BoardName; readOnly: boolean;
       <div className="tools">
         {!readOnly && (
           <>
-            <button onClick={addNode}>Add node</button>
+            <button onClick={addNode}>Add card</button>
             <button onClick={tidy} disabled={count === 0}>
               Tidy
             </button>
@@ -358,7 +358,7 @@ function Tools({ name, readOnly, onTidy }: { name: BoardName; readOnly: boolean;
             tools.switchLineType(tools.lineType === LineType.BEZIER ? LineType.LINE_CHART : LineType.BEZIER)
           }
         >
-          Lines
+          Line style
         </button>
         <button aria-label="Zoom out" onClick={() => tools.zoomout()}>
           −

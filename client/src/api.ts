@@ -66,7 +66,7 @@ const generate = async (
   text: string,
   scope: Scope,
   onEvent: (event: Exclude<GenerateEvent, Terminal>) => void,
-  extra: { source?: string; focus?: Focus; askQuestions?: boolean } = {},
+  extra: { source?: string; focus?: Focus; askQuestions?: boolean; autoName?: boolean } = {},
 ) =>
   readStream<GenerateEvent>(
     await fetch(`/api/projects/${id}/generate`, json('POST', { text, scope, ...extra })),

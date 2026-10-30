@@ -19,6 +19,9 @@ import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
 import { ProjectMenu } from './ProjectMenu';
 import { Questions } from './Questions';
+import { RecentProjects } from './RecentProjects';
+import { StartBuilding } from './StartBuilding';
+import { useDismiss } from './useDismiss';
 import type { LiveBoard } from './liveBuild';
 import { ThemeToggle } from './ThemeToggle';
 import { useTheme } from './theme';
@@ -94,7 +97,9 @@ export function App({ user, idea, onLogout }: AppProps) {
   const [undoPlan, setUndoPlan] = useState<Plan | null>(null);
   // Set while a failed build can be run again.
   const [retry, setRetry] = useState<(() => void) | null>(null);
-  const [notesOpen, setNotesOpen] = useState(false);
+  const [panel, setPanel] = useState<'notes' | 'questions' | null>(null);
+  const [composing, setComposing] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [placed, setPlaced] = useState<number | null>(null);
   // Nodes streamed so far per board, shown on the tabs until the plan lands.
   const [streamed, setStreamed] = useState(NO_COUNTS);
@@ -135,6 +140,7 @@ export function App({ user, idea, onLogout }: AppProps) {
     setChosenScope(null);
     setFocus(null);
     setPlaced(null);
+    setPanel(null);
   };
 
   const open = useCallback(
@@ -176,8 +182,18 @@ export function App({ user, idea, onLogout }: AppProps) {
 
   const startNew = guard(async () => {
     await flushSave();
+    setProjects(await api.list());
     show(null);
   });
+
+  const renameProject = (name: string) =>
+    guard(async () => {
+      if (!project) return;
+      const { id } = project;
+      await api.rename(id, name);
+      setProject((current) => current && { ...current, name });
+      setProjects((list) => list.map((p) => (p.id === id ? { ...p, name } : p)));
+    })();
 
   const ensureProject = async (name: string) => {
     if (project) return project;
@@ -271,6 +287,7 @@ export function App({ user, idea, onLogout }: AppProps) {
         setProjects((list) => list.map((p) => (p.id === id ? { ...p, name } : p)));
       }
       const before = target.plan;
+      const naming = buildScope === 'project' && !extra.source && before.boards.system.nodes.length === 0;
       setTab(board);
       setPreviewing(false);
       if (focus) live.current?.focusOn(focus.nodeId);
@@ -280,6 +297,7 @@ export function App({ user, idea, onLogout }: AppProps) {
           if (event.type === 'requirements') {
             const { requirements, questions: asked } = event;
             setBusy('mapping');
+            if (asked.some((q) => !q.answer && !q.skipped && !q.used)) setPanel('questions');
             setProject(
               (current) => current && { ...current, plan: { ...current.plan, requirements, questions: asked } },
             );
@@ -292,9 +310,10 @@ export function App({ user, idea, onLogout }: AppProps) {
           if (event.board === board) {
             live.current?.add(event.type === 'node' ? { node: event.node } : { edge: event.edge });
           }
-        }, { ...extra, focus: focus ? { board: focus.board, nodeId: focus.nodeId } : undefined });
+        }, { ...extra, autoName: naming, focus: focus ? { board: focus.board, nodeId: focus.nodeId } : undefined });
         fresh.current = newNodeIds(before, updated.plan);
         setProject(updated);
+        setProjects((list) => list.map((p) => (p.id === updated.id ? { ...p, name: updated.name } : p)));
         setStreamed(NO_COUNTS);
         setDrawing(board);
         if (live.current) {
@@ -306,6 +325,7 @@ export function App({ user, idea, onLogout }: AppProps) {
         setSpeech('');
         setChosenScope(null);
         setFocus(null);
+        setComposing(false);
         setUndoPlan(before);
       } catch (e) {
         // Whatever was drawn or streamed so far was never saved.
@@ -390,6 +410,8 @@ export function App({ user, idea, onLogout }: AppProps) {
   };
 
   const hero = !busy && placed === null && nodeCount === 0;
+  const dock = useDismiss<HTMLDivElement>(composing, useCallback(() => setComposing(false), []));
+  const compact = !hero && !composing && !speech && !focus && !recording && !busy;
   const requirements = project?.plan.requirements ?? [];
   const status =
     busy === 'reading'
@@ -458,6 +480,8 @@ export function App({ user, idea, onLogout }: AppProps) {
               current={project}
               disabled={busy !== null || placed !== null || drafting}
               onOpen={(id) => guard(() => open(id))()}
+              onNew={startNew}
+              onRename={renameProject}
               onDelete={deleteProject}
             />
           )}
@@ -474,6 +498,7 @@ export function App({ user, idea, onLogout }: AppProps) {
                   setPreviewing(false);
                   setFocus(null);
                   setJump(undefined);
+                  setPanel(null);
                 }}
                 disabled={busy !== null || placed !== null || drafting}
               >
@@ -495,22 +520,26 @@ export function App({ user, idea, onLogout }: AppProps) {
         )}
 
         <div className="actions">
-          {project && !hero && (
-            <span className="save">
-              {saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}
-            </span>
+          {project && !hero && saveState !== 'saved' && (
+            <span className="save">{saveState === 'failed' ? 'Save failed' : 'Saving'}</span>
           )}
-          {project && undoPlan && !busy && placed === null && <button className="undo" onClick={undoBuild}>Undo build</button>}
           {project && !hero && (
             <ExportMenu key={project.id} project={project} onFlush={flushSave} onError={setError} />
           )}
-          <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busy !== null || placed !== null} />
-          <AccountMenu user={user} disabled={busy !== null || placed !== null || drafting} onLogout={logOut} />
-          {project && (
-            <button className="new-project" onClick={startNew} disabled={busy !== null || placed !== null || drafting}>
-              + New project
+          {project && !hero && (
+            <button
+              className="primary start-building"
+              onClick={guard(async () => {
+                await flushSave();
+                setStarting(true);
+              })}
+              disabled={busy !== null || placed !== null}
+            >
+              Start building
             </button>
           )}
+          <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busy !== null || placed !== null} />
+          <AccountMenu user={user} disabled={busy !== null || placed !== null || drafting} onLogout={logOut} />
         </div>
       </header>
 
@@ -526,16 +555,28 @@ export function App({ user, idea, onLogout }: AppProps) {
         </div>
       )}
 
-      {!hero && !previewing && (requirements.length > 0 || decisions.length > 0) && (
+      {!hero && !previewing && (requirements.length > 0 || decisions.length > 0 || undoPlan) && (
         <div className="rail">
-          <button
-            className={`notes-toggle${notesOpen ? ' active' : ''}`}
-            aria-expanded={notesOpen}
-            onClick={() => setNotesOpen((open) => !open)}
-          >
-            Notes <span>{requirements.length + decisions.length}</span>
-          </button>
-          {notesOpen ? (
+          <div className="rail-toggles">
+            <button
+              className={panel === 'notes' ? 'active' : ''}
+              aria-expanded={panel === 'notes'}
+              onClick={() => setPanel((open) => (open === 'notes' ? null : 'notes'))}
+            >
+              Notes <span>{requirements.length + decisions.length}</span>
+            </button>
+            {openQuestions.length > 0 && (
+              <button
+                className={`asking${panel === 'questions' ? ' active' : ''}`}
+                aria-expanded={panel === 'questions'}
+                onClick={() => setPanel((open) => (open === 'questions' ? null : 'questions'))}
+              >
+                Questions <span>{openQuestions.length}</span>
+              </button>
+            )}
+            {project && undoPlan && !busy && placed === null && <button onClick={undoBuild}>Undo build</button>}
+          </div>
+          {panel === 'notes' && (
             <aside className="rail-panel notes">
               {decisions.length > 0 && (
                 <>
@@ -560,19 +601,19 @@ export function App({ user, idea, onLogout }: AppProps) {
                 ))}
               </ul>
             </aside>
-          ) : (
-            openQuestions.length > 0 && (
-              <Questions
-                questions={openQuestions}
-                busy={busy !== null || placed !== null}
-                onAnswer={(id, answer) => changeQuestions((q) => (q.id === id ? { ...q, answer } : q))}
-                onSkip={(id) => changeQuestions((q) => (q.id === id ? { ...q, skipped: true } : q))}
-                onDismiss={() =>
-                  changeQuestions((q) => (openQuestions.includes(q) ? { ...q, skipped: true } : q))
-                }
-                onApply={useAnswers}
-              />
-            )
+          )}
+          {panel === 'questions' && openQuestions.length > 0 && (
+            <Questions
+              questions={openQuestions}
+              busy={busy !== null || placed !== null}
+              onAnswer={(id, answer) => changeQuestions((q) => (q.id === id ? { ...q, answer } : q))}
+              onSkip={(id) => changeQuestions((q) => (q.id === id ? { ...q, skipped: true } : q))}
+              onDismiss={() =>
+                changeQuestions((q) => (openQuestions.includes(q) ? { ...q, skipped: true } : q))
+              }
+              onClose={() => setPanel(null)}
+              onApply={useAnswers}
+            />
           )}
         </div>
       )}
@@ -584,7 +625,11 @@ export function App({ user, idea, onLogout }: AppProps) {
         </div>
       )}
 
-      <section className={`dock${hero ? ' hero' : ''}`} hidden={previewing}>
+      {project && starting && (
+        <StartBuilding project={project} openQuestions={openQuestions.length} onClose={() => setStarting(false)} />
+      )}
+
+      <section className={`dock${hero ? ' hero' : ''}${hero && projects.length > 0 ? ' returning' : ''}`} hidden={previewing}>
         <div className="dock-main">
           {hero && (
             <div className="hero-copy">
@@ -609,7 +654,12 @@ export function App({ user, idea, onLogout }: AppProps) {
               </p>
             </div>
           )}
-          <div className="composer" onKeyDown={onKeyDown}>
+          <div
+          ref={dock}
+          className={`composer${compact ? ' compact' : ''}`}
+          onKeyDown={onKeyDown}
+          onFocus={() => setComposing(true)}
+        >
             <button
               ref={orb}
               className={`orb${recording ? ' live' : ''}`}
@@ -642,7 +692,7 @@ export function App({ user, idea, onLogout }: AppProps) {
               }
               value={speech}
               onChange={(e) => setSpeech(e.target.value)}
-              rows={hero ? 3 : 2}
+              rows={hero ? 3 : compact ? 1 : 2}
             />
             <div className="composer-actions">
               {focus && (
@@ -678,7 +728,12 @@ export function App({ user, idea, onLogout }: AppProps) {
             </div>
           </div>
         </div>
-        {hero && <HowItWorks />}
+        {hero &&
+          (projects.length > 0 ? (
+            <RecentProjects projects={projects} onOpen={(id) => guard(() => open(id))()} />
+          ) : (
+            <HowItWorks />
+          ))}
       </section>
     </div>
   );

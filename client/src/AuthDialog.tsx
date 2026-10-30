@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import type { User } from '../../shared/plan';
 import { api } from './api';
+import { Modal } from './Modal';
 
 export type AuthMode = 'signup' | 'login';
 
@@ -13,18 +14,11 @@ type Props = {
 };
 
 export function AuthDialog({ mode, hasIdea, onMode, onClose, onDone }: Props) {
-  const dialog = useRef<HTMLDialogElement>(null);
-  const emailInput = useRef<HTMLInputElement>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const signingUp = mode === 'signup';
-
-  useEffect(() => {
-    dialog.current?.showModal();
-    emailInput.current?.focus();
-  }, []);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -39,25 +33,13 @@ export function AuthDialog({ mode, hasIdea, onMode, onClose, onDone }: Props) {
   };
 
   return (
-    <dialog
-      ref={dialog}
-      className="auth-dialog"
-      aria-label={signingUp ? 'Create your account' : 'Log in'}
-      onClose={onClose}
-      onMouseDown={(e) => {
-        if (e.target === dialog.current) onClose();
-      }}
-    >
+    <Modal label={signingUp ? 'Create your account' : 'Log in'} onClose={onClose}>
       <form className="auth" onSubmit={submit}>
-        <button type="button" className="auth-close" aria-label="Close" onClick={onClose}>
-          ×
-        </button>
         <h2>{signingUp ? 'Create your account' : 'Welcome back'}</h2>
         {hasIdea && <p>Your idea is saved. It starts building as soon as you are in.</p>}
         <label>
           Email
           <input
-            ref={emailInput}
             type="email"
             autoComplete="email"
             required
@@ -97,6 +79,6 @@ export function AuthDialog({ mode, hasIdea, onMode, onClose, onDone }: Props) {
           {signingUp ? 'I already have an account' : 'I need an account'}
         </button>
       </form>
-    </dialog>
+    </Modal>
   );
 }
