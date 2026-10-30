@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import {
   EditorRenderer,
   Field,
   FreeLayoutEditorProvider,
-  Rectangle,
   WorkflowNodeRenderer,
   WorkflowSelectService,
   getNodeForm,
@@ -13,7 +12,6 @@ import {
   useService,
   type FreeLayoutPluginContext,
   type FreeLayoutProps,
-  type WorkflowJSON,
   type WorkflowLineEntity,
   type WorkflowNodeEntity,
   type WorkflowNodeProps,
@@ -21,9 +19,20 @@ import {
 import { createFreeLinesPlugin } from '@flowgram.ai/free-lines-plugin';
 import { createFreeSnapPlugin } from '@flowgram.ai/free-snap-plugin';
 import { MinimapRender, createMinimapPlugin } from '@flowgram.ai/minimap-plugin';
-import type { Board, BoardName, PlanEdge, PlanNode } from '../../shared/plan';
+import type { Board, BoardName, NodeDetails } from '../../shared/plan';
+import { api } from './api';
 import { KindIcon } from './KindIcon';
 import { NODE_HEIGHT, NODE_WIDTH, isHorizontal, layoutBoard } from './layout';
+import {
+  NODE_TYPE,
+  createLiveBuild,
+  fit,
+  reducedMotion,
+  toBoard,
+  toEdgeJson,
+  toNodeJson,
+  type LiveBoard,
+} from './liveBuild';
 
 const KINDS: Record<BoardName, string[]> = {
   system: ['client', 'service', 'database', 'external', 'queue'],
@@ -31,75 +40,8 @@ const KINDS: Record<BoardName, string[]> = {
   roadmap: ['phase', 'milestone'],
 };
 
-const NODE_TYPE = 'card';
-const BUILD_STEP_MS = 260;
-const MAX_FIT_ZOOM = 1;
 // Small boards fit on screen, where the minimap would only cover nodes.
 const MINIMAP_THRESHOLD = 12;
-
-const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-const toNodeJson = (n: PlanNode) => ({
-  id: n.id,
-  type: NODE_TYPE,
-  meta: { position: { x: n.x ?? 0, y: n.y ?? 0 } },
-  data: { label: n.label, description: n.description, kind: n.kind },
-});
-
-const toEdgeJson = (e: PlanEdge) => ({
-  sourceNodeID: e.source,
-  targetNodeID: e.target,
-  data: { label: e.label },
-});
-
-const toBoard = (json: WorkflowJSON): Board => ({
-  nodes: json.nodes.map((n) => ({
-    id: n.id,
-    label: n.data.label,
-    description: n.data.description ?? '',
-    kind: n.data.kind,
-    x: n.meta?.position?.x,
-    y: n.meta?.position?.y,
-  })),
-  edges: json.edges.map((e) => ({
-    id: `${e.sourceNodeID}->${e.targetNodeID}`,
-    source: e.sourceNodeID,
-    target: e.targetNodeID,
-    label: e.data?.label,
-  })),
-});
-
-// Screen space the floating panels cover, so fitted nodes land clear of them.
-const fitMargins = () => ({
-  top: 96,
-  right: 40,
-  bottom: 170,
-  left: window.innerWidth > 900 ? 310 : 30,
-});
-
-function fit(ctx: FreeLayoutPluginContext, easing = true) {
-  const { nodes } = ctx.document.toJSON();
-  if (nodes.length === 0) return;
-  const xs = nodes.map((n) => n.meta?.position?.x ?? 0);
-  const ys = nodes.map((n) => n.meta?.position?.y ?? 0);
-  // FlowGram positions a node by its top center.
-  const [x, y] = [Math.min(...xs) - NODE_WIDTH / 2, Math.min(...ys)];
-  const width = Math.max(...xs) + NODE_WIDTH / 2 - x;
-  const height = Math.max(...ys) + NODE_HEIGHT - y;
-
-  const { top, right, bottom, left } = fitMargins();
-  const { width: screenWidth, height: screenHeight } = ctx.playground.config.getViewport(false);
-  const zoom = Math.min(
-    MAX_FIT_ZOOM,
-    (screenWidth - left - right) / width,
-    (screenHeight - top - bottom) / height,
-  );
-  // Fits to a slack rectangle around the nodes that matches the panel margins.
-  const slackX = (screenWidth / zoom - width) * (left / (left + right));
-  const slackY = (screenHeight / zoom - height) * (top / (top + bottom));
-  const view = new Rectangle(x - slackX, y - slackY, screenWidth / zoom, screenHeight / zoom);
-  ctx.playground.config.fitView(view, easing, 0);
-}
 
 function CardBody() {
   return (
@@ -146,7 +88,72 @@ function LineLabel({ line }: { line: WorkflowLineEntity }) {
   );
 }
 
-function Inspector({ name }: { name: BoardName }) {
+// Details are written the first time a node is opened and kept with it. The
+// short delay stops a card that is only being dragged past from spending tokens.
+const DETAILS_DELAY_MS = 600;
+
+type DetailsProps = {
+  name: BoardName;
+  node: WorkflowNodeEntity;
+  projectId: string;
+  details: NodeDetails | undefined;
+  onFlush: () => Promise<void>;
+  onLoaded: (details: NodeDetails) => void;
+};
+
+function Details({ name, node, projectId, details, onFlush, onLoaded }: DetailsProps) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      await onFlush();
+      const written = await api.details(projectId, name, node.id);
+      if (!node.disposed) onLoaded(written);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not write the details');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (details) return;
+    const timer = window.setTimeout(load, DETAILS_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="details">
+      {details && (
+        <>
+          <p className="details-summary">{details.summary}</p>
+          {details.sections.map((section) => (
+            <section key={section.title}>
+              <h4>{section.title}</h4>
+              <ul>
+                {section.items.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
+        </>
+      )}
+      {loading && <p className="details-status">Working out the details…</p>}
+      {error && <p className="details-status failed">{error}</p>}
+      {!loading && (details || error) && (
+        <button onClick={load}>{details ? 'Rewrite with my latest answers' : 'Try again'}</button>
+      )}
+    </div>
+  );
+}
+
+type InspectorProps = { name: BoardName; projectId: string; onFlush: () => Promise<void> };
+
+function Inspector({ name, projectId, onFlush }: InspectorProps) {
   const selection = useService(WorkflowSelectService);
   const [node, setNode] = useState<WorkflowNodeEntity | undefined>();
   const [, redraw] = useState(0);
@@ -163,7 +170,7 @@ function Inspector({ name }: { name: BoardName }) {
   const form = node && getNodeForm(node);
   if (!node || !form) return null;
 
-  const set = (path: string, value: string) => {
+  const set = (path: string, value: unknown) => {
     form.setValueIn(path, value);
     redraw((n) => n + 1);
   };
@@ -171,29 +178,49 @@ function Inspector({ name }: { name: BoardName }) {
 
   return (
     <aside className="inspector" key={node.id}>
-      <label>
-        Label
-        <input value={form.getValueIn('label')} onChange={(e) => set('label', e.target.value)} />
-      </label>
-      <label>
-        Type
-        <select value={kind} onChange={(e) => set('kind', e.target.value)}>
-          {[...new Set([...KINDS[name], kind])].map((k) => (
-            <option key={k}>{k}</option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Description
-        <textarea
-          rows={4}
-          value={form.getValueIn('description')}
-          onChange={(e) => set('description', e.target.value)}
-        />
-      </label>
-      <button className="danger" onClick={() => node.dispose()}>
-        Delete node
-      </button>
+      <header className={`kind-${kind}`}>
+        <KindIcon kind={kind} />
+        <span>{kind}</span>
+      </header>
+      <h3>{form.getValueIn('label')}</h3>
+      {form.getValueIn('description') && <p className="muted">{form.getValueIn('description')}</p>}
+
+      <Details
+        key={node.id}
+        name={name}
+        node={node}
+        projectId={projectId}
+        details={form.getValueIn('details')}
+        onFlush={onFlush}
+        onLoaded={(details) => set('details', details)}
+      />
+
+      <details className="edit-node">
+        <summary>Edit this node</summary>
+        <label>
+          Label
+          <input value={form.getValueIn('label')} onChange={(e) => set('label', e.target.value)} />
+        </label>
+        <label>
+          Type
+          <select value={kind} onChange={(e) => set('kind', e.target.value)}>
+            {[...new Set([...KINDS[name], kind])].map((k) => (
+              <option key={k}>{k}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Description
+          <textarea
+            rows={3}
+            value={form.getValueIn('description')}
+            onChange={(e) => set('description', e.target.value)}
+          />
+        </label>
+        <button className="danger" onClick={() => node.dispose()}>
+          Delete node
+        </button>
+      </details>
     </aside>
   );
 }
@@ -266,6 +293,7 @@ function Tools({ name, onTidy }: { name: BoardName; onTidy: (board: Board) => vo
         <div className="minimap">
           <MinimapRender
             containerStyles={{ position: 'relative', inset: 'unset', pointerEvents: 'auto' }}
+            panelStyles={{ padding: 0, background: 'none', border: 0, boxShadow: 'none' }}
             inactiveStyle={{ opacity: 1, scale: 1, translateX: 0, translateY: 0 }}
           />
         </div>
@@ -277,17 +305,22 @@ function Tools({ name, onTidy }: { name: BoardName; onTidy: (board: Board) => vo
 type Props = {
   name: BoardName;
   board: Board;
+  projectId: string;
+  // Writes pending edits, so the server sees the node a request refers to.
+  onFlush: () => Promise<void>;
   // Node ids to draw one at a time when the canvas opens.
   fresh: string[];
+  // Filled while the canvas is open, for feeding it a plan as it is generated.
+  live: RefObject<LiveBoard | null>;
   onChange: (board: Board) => void;
-  onProgress: (progress: { placed: number; total: number } | null) => void;
+  onProgress: (placed: number | null) => void;
 };
 
-export function BoardCanvas({ name, board, fresh, onChange, onProgress }: Props) {
+export function BoardCanvas({ name, board, projectId, onFlush, fresh, live, onChange, onProgress }: Props) {
   const latest = useRef({ onChange, onProgress });
   latest.current = { onChange, onProgress };
   const building = useRef(false);
-  const timer = useRef<number | undefined>(undefined);
+  const stopBuild = useRef<(() => void) | null>(null);
 
   const editorProps = useMemo<FreeLayoutProps>(() => {
     const laidOut = layoutBoard(board, name);
@@ -296,47 +329,27 @@ export function BoardCanvas({ name, board, fresh, onChange, onProgress }: Props)
     const edges = laidOut.edges.filter((e) => !incoming.has(e.source) && !incoming.has(e.target));
     const horizontal = isHorizontal(name);
 
-    // Grows outward along the direction the board reads.
-    const queue = laidOut.nodes
-      .filter((n) => incoming.has(n.id))
-      .sort((a, b) => (horizontal ? a.x! - b.x! : a.y! - b.y!));
-
-    const build = (ctx: FreeLayoutPluginContext) => {
-      building.current = true;
-      ctx.playground.config.readonly = true;
-      const present = new Set(nodes.map((n) => n.id));
-      const total = queue.length;
-      let placed = 0;
-
-      const step = () => {
-        const node = queue[placed];
-        ctx.document.createWorkflowNode(toNodeJson(node));
-        present.add(node.id);
+    const open = (ctx: FreeLayoutPluginContext) => {
+      const build = createLiveBuild(ctx, name, { nodes, edges }, {
+        onStart: () => {
+          building.current = true;
+        },
+        onProgress: (placed) => latest.current.onProgress(placed),
+        onDone: (result) => {
+          building.current = false;
+          latest.current.onProgress(null);
+          latest.current.onChange(result);
+        },
+      });
+      live.current = build;
+      stopBuild.current = build.dispose;
+      if (incoming.size > 0) {
+        laidOut.nodes.filter((n) => incoming.has(n.id)).forEach((node) => build.add({ node }));
         laidOut.edges
-          .filter((e) => present.has(e.source) && present.has(e.target))
-          .filter((e) => e.source === node.id || e.target === node.id)
-          .forEach((e) =>
-            ctx.document.linesManager.createLine({
-              from: e.source,
-              to: e.target,
-              data: { label: e.label },
-            }),
-          );
-        placed += 1;
-        latest.current.onProgress({ placed, total });
-        fit(ctx);
-
-        if (placed < total) {
-          timer.current = window.setTimeout(step, BUILD_STEP_MS);
-          return;
-        }
-        building.current = false;
-        ctx.playground.config.readonly = false;
-        ctx.document.linesManager.forceUpdate();
-        latest.current.onProgress(null);
-        latest.current.onChange(toBoard(ctx.document.toJSON()));
-      };
-      step();
+          .filter((e) => incoming.has(e.source) || incoming.has(e.target))
+          .forEach((edge) => build.add({ edge }));
+        build.finish(laidOut);
+      }
     };
 
     return {
@@ -399,19 +412,31 @@ export function BoardCanvas({ name, board, fresh, onChange, onProgress }: Props)
       },
       onAllLayersRendered: (ctx) => {
         fit(ctx, false);
-        if (queue.length > 0) build(ctx);
+        open(ctx);
+        // Saved lines are drawn before the cards are measured, which stacks them
+        // at the origin until they are recalculated.
+        requestAnimationFrame(() => {
+          ctx.document.getAllNodes().forEach((node) => node.ports.updateAllPorts());
+          ctx.document.linesManager.forceUpdate();
+        });
       },
     };
   }, []);
 
-  useEffect(() => () => clearTimeout(timer.current), []);
+  useEffect(
+    () => () => {
+      stopBuild.current?.();
+      live.current = null;
+    },
+    [live],
+  );
 
   return (
     <div className="canvas">
       <FreeLayoutEditorProvider {...editorProps}>
         <EditorRenderer className="editor" />
         <Tools name={name} onTidy={onChange} />
-        <Inspector name={name} />
+        <Inspector name={name} projectId={projectId} onFlush={onFlush} />
       </FreeLayoutEditorProvider>
     </div>
   );
