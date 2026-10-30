@@ -5,6 +5,8 @@ import {
   type Board,
   type BoardName,
   type Plan,
+  type Requirement,
+  type Scope,
 } from '../../shared/plan';
 
 // Takes a system and user prompt, returns the model's raw JSON text.
@@ -30,16 +32,17 @@ const mappingSchema = z.object({
 });
 
 export const EXTRACT_SYSTEM = `You turn spoken brainstorming into software requirements.
-The input is JSON with "speech" (a raw transcript, possibly rambling) and "knownRequirements".
+The input is JSON with "speech" (a raw transcript, possibly rambling), "scope" and "knownRequirements".
 Return JSON: {"requirements": [{"id", "text", "type"}]}.
 - Return only requirements that are new, never repeats of knownRequirements.
 - "type" is one of: functional, non-functional, constraint, open-question.
 - Use short kebab-case ids such as "req-offline-sync".
 - Write each requirement as one clear sentence. Do not invent scope the speaker did not imply.
-- If the speaker sounds unsure about something, record it as an open-question.`;
+- If the speaker sounds unsure about something, record it as an open-question.
+- If "scope" is "feature", the speaker is describing one addition to a product. Capture what that feature needs, not requirements for the wider product.`;
 
 export const MAP_SYSTEM = `You are a software architect turning requirements into three linked plans.
-The input is JSON with "requirements" and "existingBoards".
+The input is JSON with "requirements", "scope" and "existingBoards".
 Return JSON: {"system": Board, "features": Board, "roadmap": Board}.
 Board is {"nodes": [{"id", "label", "description", "kind"}], "edges": [{"source", "target", "label"}]}.
 - system: the architecture. kind is one of client, service, database, external, queue. Edges are data or control flow, labelled with what passes along them.
@@ -47,7 +50,9 @@ Board is {"nodes": [{"id", "label", "description", "kind"}], "edges": [{"source"
 - roadmap: delivery order. kind is one of phase, milestone. Edges run prerequisite to dependent, including across phases.
 - Every requirement must be covered by at least one feature.
 - Include every node in existingBoards unchanged, keeping its id, and connect new nodes to them.
-- Use short kebab-case ids, unique within a board. Labels are 2 to 5 words.`;
+- Use short kebab-case ids, unique within a board. Labels are 2 to 5 words.
+- If "scope" is "project", plan the whole product from scratch.
+- If "scope" is "feature", plan only that feature: the components it adds or changes, its work breakdown and its delivery steps. Do not add unrelated parts of the product, and connect the new nodes to the existingBoards nodes they build on.`;
 
 async function completeJson<T>(
   complete: Complete,
@@ -92,16 +97,28 @@ const withoutPositions = (board: Board) => ({
   edges: board.edges.map(({ source, target, label }) => ({ source, target, label })),
 });
 
-export async function runPipeline(speech: string, existing: Plan, complete: Complete): Promise<Plan> {
+type PipelineOptions = {
+  scope?: Scope;
+  // Called as soon as requirements are known, before the slower mapping stage.
+  onRequirements?: (requirements: Requirement[]) => void;
+};
+
+export async function runPipeline(
+  speech: string,
+  existing: Plan,
+  complete: Complete,
+  { scope = 'project', onRequirements }: PipelineOptions = {},
+): Promise<Plan> {
   const { requirements: extracted } = await completeJson(
     complete,
     EXTRACT_SYSTEM,
-    JSON.stringify({ speech, knownRequirements: existing.requirements }),
+    JSON.stringify({ speech, scope, knownRequirements: existing.requirements }),
     extractionSchema,
   );
 
   const known = new Set(existing.requirements.map((r) => r.id));
   const requirements = [...existing.requirements, ...extracted.filter((r) => !known.has(r.id))];
+  onRequirements?.(requirements);
 
   const boardNames: BoardName[] = ['system', 'features', 'roadmap'];
   const mapped = await completeJson(
@@ -109,6 +126,7 @@ export async function runPipeline(speech: string, existing: Plan, complete: Comp
     MAP_SYSTEM,
     JSON.stringify({
       requirements,
+      scope,
       existingBoards: Object.fromEntries(
         boardNames.map((name) => [name, withoutPositions(existing.boards[name])]),
       ),
