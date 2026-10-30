@@ -1,16 +1,37 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Board, BoardName, Plan, Project, ProjectSummary } from '../../shared/plan';
+import type { Board, BoardName, Plan, Project, ProjectSummary, Scope } from '../../shared/plan';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import { useRecorder } from './useRecorder';
 
 const TABS: { name: BoardName; label: string }[] = [
-  { name: 'system', label: 'System design' },
+  { name: 'system', label: 'System' },
   { name: 'features', label: 'Features' },
   { name: 'roadmap', label: 'Roadmap' },
 ];
 
+const SCOPES: { name: Scope; label: string }[] = [
+  { name: 'project', label: 'New project' },
+  { name: 'feature', label: 'Add a feature' },
+];
+
 const SAVE_DELAY_MS = 600;
+const UNTITLED = 'Untitled idea';
+const NO_FRESH: Record<BoardName, string[]> = { system: [], features: [], roadmap: [] };
+
+const nameFrom = (speech: string) => {
+  const words = speech.trim().split(/\s+/);
+  return words.slice(0, 6).join(' ') + (words.length > 6 ? '…' : '');
+};
+
+const newNodeIds = (before: Plan, after: Plan) => {
+  const fresh = { ...NO_FRESH };
+  for (const { name } of TABS) {
+    const known = new Set(before.boards[name].nodes.map((n) => n.id));
+    fresh[name] = after.boards[name].nodes.filter((n) => !known.has(n.id)).map((n) => n.id);
+  }
+  return fresh;
+};
 
 export function App() {
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -19,11 +40,15 @@ export function App() {
   // Bumped when a plan arrives from the server, so the canvas rebuilds from it.
   const [revision, setRevision] = useState(0);
   const [speech, setSpeech] = useState('');
-  const [busy, setBusy] = useState<'transcribing' | 'generating' | null>(null);
+  const [chosenScope, setChosenScope] = useState<Scope | null>(null);
+  const [busy, setBusy] = useState<'transcribing' | 'reading' | 'mapping' | null>(null);
+  const [progress, setProgress] = useState<{ placed: number; total: number } | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'failed'>('saved');
   const [error, setError] = useState<string | null>(null);
 
   const pendingSave = useRef<{ id: string; plan: Plan; timer: number } | null>(null);
+  const fresh = useRef(NO_FRESH);
+  const orb = useRef<HTMLButtonElement>(null);
 
   const flushSave = useCallback(async () => {
     const pending = pendingSave.current;
@@ -39,12 +64,22 @@ export function App() {
     }
   }, []);
 
-  const open = useCallback(async (id: string) => {
-    await flushSave();
-    setProject(await api.get(id));
+  const show = (next: Project | null) => {
+    fresh.current = NO_FRESH;
+    setProject(next);
     setRevision((r) => r + 1);
     setSpeech('');
-  }, [flushSave]);
+    setChosenScope(null);
+    setProgress(null);
+  };
+
+  const open = useCallback(
+    async (id: string) => {
+      await flushSave();
+      show(await api.get(id));
+    },
+    [flushSave],
+  );
 
   const guard = (action: () => Promise<void>) => async () => {
     setError(null);
@@ -63,16 +98,18 @@ export function App() {
     })();
   }, [open]);
 
-  const createProject = guard(async () => {
-    const name = window.prompt('Project name')?.trim();
-    if (!name) return;
+  const startNew = guard(async () => {
     await flushSave();
+    show(null);
+  });
+
+  const ensureProject = async (name: string) => {
+    if (project) return project;
     const created = await api.create(name);
     setProjects((list) => [created, ...list]);
     setProject(created);
-    setRevision((r) => r + 1);
-    setSpeech('');
-  });
+    return created;
+  };
 
   const deleteProject = guard(async () => {
     if (!project || !window.confirm(`Delete "${project.name}"?`)) return;
@@ -83,7 +120,7 @@ export function App() {
     await api.remove(project.id);
     const remaining = projects.filter((p) => p.id !== project.id);
     setProjects(remaining);
-    setProject(null);
+    show(null);
     if (remaining[0]) await open(remaining[0].id);
   });
 
@@ -102,75 +139,129 @@ export function App() {
     setSaveState('saving');
   };
 
-  const { recording, start, stop } = useRecorder((audio) =>
-    guard(async () => {
-      if (!project) return;
-      setBusy('transcribing');
-      try {
-        const { text } = await api.transcribe(project.id, audio);
-        setSpeech((current) => (current ? `${current} ${text}` : text));
-      } finally {
-        setBusy(null);
-      }
-    })(),
+  const { recording, start, stop } = useRecorder(
+    (audio) =>
+      guard(async () => {
+        setBusy('transcribing');
+        try {
+          const target = await ensureProject(UNTITLED);
+          const { text } = await api.transcribe(target.id, audio);
+          setSpeech((current) => (current ? `${current} ${text}` : text));
+        } finally {
+          setBusy(null);
+        }
+      })(),
+    orb,
   );
 
+  const nodeCount = project
+    ? TABS.reduce((sum, t) => sum + project.plan.boards[t.name].nodes.length, 0)
+    : 0;
+  const scope = chosenScope ?? (nodeCount > 0 ? 'feature' : 'project');
+
   const generate = guard(async () => {
-    if (!project) return;
-    setBusy('generating');
+    setBusy('reading');
     try {
       await flushSave();
-      setProject(await api.generate(project.id, speech));
+      let target = await ensureProject(nameFrom(speech));
+      if (target.name === UNTITLED) {
+        target = await api.rename(target.id, nameFrom(speech));
+        const { id, name } = target;
+        setProjects((list) => list.map((p) => (p.id === id ? { ...p, name } : p)));
+      }
+      const before = target.plan;
+      const updated = await api.generate(target.id, speech, scope, (requirements) => {
+        setBusy('mapping');
+        setProject((current) =>
+          current && { ...current, plan: { ...current.plan, requirements } },
+        );
+      });
+      fresh.current = newNodeIds(before, updated.plan);
+      setTab('system');
+      setProject(updated);
       setRevision((r) => r + 1);
       setSpeech('');
+      setChosenScope(null);
     } finally {
       setBusy(null);
     }
   });
 
-  const nodeCount = project
-    ? TABS.reduce((sum, t) => sum + project.plan.boards[t.name].nodes.length, 0)
-    : 0;
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && speech.trim() && !busy) generate();
+  };
+
+  const hero = !busy && !progress && nodeCount === 0;
+  const requirements = project?.plan.requirements ?? [];
+  const status =
+    busy === 'reading'
+      ? 'Reading what you said'
+      : busy === 'mapping'
+        ? 'Designing the system, features and roadmap'
+        : progress
+          ? `Placing ${progress.placed} of ${progress.total}`
+          : null;
 
   return (
     <div className="app">
+      {project && (
+        <BoardCanvas
+          key={`${project.id}-${tab}-${revision}`}
+          name={tab}
+          board={project.plan.boards[tab]}
+          fresh={fresh.current[tab]}
+          onChange={(board) => onBoardChange(tab, board)}
+          onProgress={(next) => {
+            setProgress(next);
+            if (!next) fresh.current = { ...fresh.current, [tab]: [] };
+          }}
+        />
+      )}
+
       <header className="topbar">
-        <span className="brand">BuildFlow</span>
-        <select
-          aria-label="Project"
-          value={project?.id ?? ''}
-          onChange={(e) => guard(() => open(e.target.value))()}
-        >
-          {!project && <option value="">No project</option>}
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <button onClick={createProject}>New project</button>
-        {project && (
-          <button className="quiet" onClick={deleteProject}>
-            Delete
-          </button>
-        )}
-        <nav className="tabs">
-          {TABS.map((t) => (
-            <button
-              key={t.name}
-              className={t.name === tab ? 'active' : ''}
-              onClick={() => setTab(t.name)}
-              disabled={!project}
+        <div className="pill identity">
+          <span className="brand">BuildFlow</span>
+          {projects.length > 0 && (
+            <select
+              aria-label="Project"
+              value={project?.id ?? ''}
+              onChange={(e) => guard(() => open(e.target.value))()}
             >
-              {t.label}
-              {project && <span>{project.plan.boards[t.name].nodes.length}</span>}
+              {!project && <option value="">New idea</option>}
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button className="quiet" onClick={startNew} disabled={!project}>
+            New
+          </button>
+          {project && (
+            <button className="quiet" onClick={deleteProject}>
+              Delete
             </button>
-          ))}
-        </nav>
-        {project && (
-          <span className="status">
-            {nodeCount} nodes · {saveState === 'failed' ? 'save failed' : saveState}
-          </span>
+          )}
+        </div>
+
+        {project && !hero && (
+          <nav className="pill tabs">
+            {TABS.map((t) => (
+              <button
+                key={t.name}
+                className={t.name === tab ? 'active' : ''}
+                onClick={() => setTab(t.name)}
+              >
+                {t.label}
+                <span>{project.plan.boards[t.name].nodes.length}</span>
+              </button>
+            ))}
+          </nav>
+        )}
+
+        {project && !hero && (
+          <span className="save">{saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}</span>
         )}
       </header>
 
@@ -183,69 +274,90 @@ export function App() {
         </div>
       )}
 
-      {project ? (
-        <main className="workspace">
-          <section className="session">
-            <button
-              className={`mic${recording ? ' live' : ''}`}
-              onClick={guard(recording ? async () => stop() : start)}
-              disabled={busy !== null}
-            >
-              {recording ? 'Stop recording' : 'Start talking'}
-            </button>
-            <textarea
-              aria-label="Speech transcript"
-              placeholder="Your words land here. You can also type or fix them before generating."
-              value={speech}
-              onChange={(e) => setSpeech(e.target.value)}
-              rows={7}
-            />
+      {requirements.length > 0 && !hero && (
+        <aside className="heard">
+          <h3>What I heard</h3>
+          <ul>
+            {requirements.map((r, i) => (
+              <li key={r.id} className={`req-${r.type}`} style={{ animationDelay: `${i * 40}ms` }}>
+                <span>{r.type.replace('-', ' ')}</span>
+                {r.text}
+              </li>
+            ))}
+          </ul>
+        </aside>
+      )}
+
+      {status && (
+        <div className="building" role="status">
+          <i />
+          {status}
+        </div>
+      )}
+
+      <section className={`dock${hero ? ' hero' : ''}`}>
+        {hero && (
+          <div className="hero-copy">
+            <h1>Say what you want to build.</h1>
+            <p>A whole product or one new feature. Talk it through and watch the plan draw itself.</p>
+          </div>
+        )}
+        <div className="composer" onKeyDown={onKeyDown}>
+          <button
+            ref={orb}
+            className={`orb${recording ? ' live' : ''}`}
+            aria-label={recording ? 'Stop recording' : 'Start talking'}
+            title={recording ? 'Stop recording' : 'Start talking'}
+            onClick={guard(recording ? async () => stop() : start)}
+            disabled={busy !== null}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              {recording ? (
+                <rect x="7" y="7" width="10" height="10" rx="2" />
+              ) : (
+                <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4" />
+              )}
+            </svg>
+          </button>
+          <textarea
+            aria-label="Describe your idea"
+            placeholder={
+              busy === 'transcribing'
+                ? 'Transcribing…'
+                : recording
+                  ? 'Listening…'
+                  : scope === 'feature'
+                    ? 'Describe the feature to add…'
+                    : 'Talk, or type your idea here…'
+            }
+            value={speech}
+            onChange={(e) => setSpeech(e.target.value)}
+            rows={hero ? 3 : 2}
+          />
+          <div className="composer-actions">
+            <div className="scope" role="radiogroup" aria-label="What to plan">
+              {SCOPES.map((s) => (
+                <button
+                  key={s.name}
+                  role="radio"
+                  aria-checked={scope === s.name}
+                  className={scope === s.name ? 'active' : ''}
+                  onClick={() => setChosenScope(s.name)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
             <button
               className="primary"
               onClick={generate}
-              disabled={!speech.trim() || busy !== null || recording}
+              disabled={!speech.trim() || busy !== null || recording || progress !== null}
             >
-              {busy === 'transcribing'
-                ? 'Transcribing…'
-                : busy === 'generating'
-                  ? 'Mapping your plan…'
-                  : 'Generate plan'}
+              {busy === 'reading' || busy === 'mapping' ? 'Building…' : 'Build it'}
             </button>
-
-            <h3>Requirements ({project.plan.requirements.length})</h3>
-            <ul className="requirements">
-              {project.plan.requirements.map((r) => (
-                <li key={r.id} className={`req-${r.type}`}>
-                  <span>{r.type}</span>
-                  {r.text}
-                </li>
-              ))}
-            </ul>
-
-            {project.transcript && (
-              <details>
-                <summary>Past transcript</summary>
-                <p>{project.transcript}</p>
-              </details>
-            )}
-          </section>
-
-          <BoardCanvas
-            key={`${project.id}-${tab}-${revision}`}
-            name={tab}
-            board={project.plan.boards[tab]}
-            onChange={(board) => onBoardChange(tab, board)}
-          />
-        </main>
-      ) : (
-        <div className="welcome">
-          <h1>Say what you want to build.</h1>
-          <p>Create a project, talk through the idea, and get a plan you can edit.</p>
-          <button className="primary" onClick={createProject}>
-            New project
-          </button>
+          </div>
         </div>
-      )}
+      </section>
     </div>
   );
 }
