@@ -12,6 +12,7 @@ import type {
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import { ExportMenu } from './ExportMenu';
+import { HowItWorks } from './HowItWorks';
 import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
 import { Questions } from './Questions';
@@ -646,6 +647,7 @@ export function App() {
             </div>
           </div>
         </div>
+        {hero && <HowItWorks />}
       </section>
     </div>
   );
