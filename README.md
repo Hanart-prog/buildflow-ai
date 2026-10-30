@@ -2,6 +2,8 @@
 
 Talk through a software idea and watch the plan draw itself: a system-design diagram, a feature hierarchy and a roadmap, all on interactive canvases. Plan a whole product from scratch, or add one feature to a plan you already have.
 
+![A plan drawing itself as an idea is described](docs/demo.gif)
+
 ## How it works
 
 1. **Capture.** The browser records your voice and Whisper transcribes it. You can review or type the text before generating, and choose **Whole product** or **One feature**.
@@ -17,6 +19,14 @@ Already built something? Drop its folder on the start screen and BuildFlow maps 
 To grow one part of a plan, open a node and choose **Build on this**. The new work is drawn on that board and connected to that node.
 
 Talking again extends the same plan. Generation only ever adds to it: the merge step in `server/src/pipeline.ts` keeps every existing node, edge and position, so your hand edits survive. The streamed items are only a preview: the finished reply is still schema-validated, retried once with the error fed back, stripped of edges that point at nodes that don't exist, and is what gets saved.
+
+## Working with a plan
+
+- **Linked boards:** open a card to jump to the system parts, features and roadmap steps tied to it.
+- **Cleaner boards:** collapse a branch on the Features board, or switch to square lines.
+- **Export:** download the plan as Markdown, or copy a prompt for a coding tool.
+- **Undo build:** return to the plan from before the last build. A failed build offers **Try again**.
+- **View-only links:** anyone with the link can read the plan. Turn the link off from the same menu.
 
 ## Stack
 
@@ -40,3 +50,5 @@ To try it without a key, set `DEMO_MODE=true` in `.env`. The real pipeline then 
 npm test
 npm run typecheck
 ```
+
+To run it as one server, use `npm start`, which builds the client and serves it from the API on `PORT`. Set `APP_PASSWORD` before putting it anywhere others can reach: without it, anyone can read every project and spend your AI key. View-only links work without the password. Plans live in `server/data`, so a host needs a persistent disk.
