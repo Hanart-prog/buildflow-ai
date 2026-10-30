@@ -1,3 +1,7 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { z, ZodError } from 'zod';
@@ -24,9 +28,26 @@ const detailsSchema = focusSchema;
 // OpenAI's transcription endpoint rejects files over 25 MB.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 
-export function createApp(store: Store, llm: Llm) {
+const CLIENT_DIST = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../client/dist');
+
+const sameSecret = (a: string, b: string) =>
+  timingSafeEqual(createHash('sha256').update(a).digest(), createHash('sha256').update(b).digest());
+
+// Set when the app is reachable by others. Shared links stay open on purpose.
+function requirePassword(password: string) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (req.path.startsWith('/shared/')) return next();
+    const [scheme, encoded] = (req.headers.authorization ?? '').split(' ');
+    const given = Buffer.from(encoded ?? '', 'base64').toString().split(':').slice(1).join(':');
+    if (scheme === 'Basic' && sameSecret(given, password)) return next();
+    res.set('WWW-Authenticate', 'Basic realm="BuildFlow"').status(401).json({ error: 'Password required' });
+  };
+}
+
+export function createApp(store: Store, llm: Llm, { password }: { password?: string } = {}) {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
+  if (password) app.use('/api', requirePassword(password));
 
   const findProject = async (id: string) => {
     const project = await store.get(id);
@@ -50,6 +71,24 @@ export function createApp(store: Store, llm: Llm) {
     const project = await store.update(req.params.id, updateSchema.parse(req.body));
     if (!project) throw new HttpError(404, 'Project not found');
     res.json(project);
+  });
+
+  app.post('/api/projects/:id/share', async (req, res) => {
+    const project = await store.setShare(req.params.id, true);
+    if (!project) throw new HttpError(404, 'Project not found');
+    res.json({ shareId: project.shareId });
+  });
+
+  app.delete('/api/projects/:id/share', async (req, res) => {
+    if (!(await store.setShare(req.params.id, false))) throw new HttpError(404, 'Project not found');
+    res.status(204).end();
+  });
+
+  // Only what a viewer needs: never the raw transcript.
+  app.get('/api/shared/:shareId', async (req, res) => {
+    const project = await store.getShared(req.params.shareId);
+    if (!project) throw new HttpError(404, 'This link is no longer shared');
+    res.json({ name: project.name, plan: project.plan });
   });
 
   app.delete('/api/projects/:id', async (req, res) => {
@@ -130,6 +169,11 @@ export function createApp(store: Store, llm: Llm) {
       res.end();
     }
   });
+
+  if (existsSync(CLIENT_DIST)) {
+    app.use(express.static(CLIENT_DIST));
+    app.get(/^(?!\/api\/).*/, (_req, res) => res.sendFile(path.join(CLIENT_DIST, 'index.html')));
+  }
 
   app.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (error instanceof HttpError) {

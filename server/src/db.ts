@@ -10,6 +10,7 @@ const SCHEMA = `
     plan JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
   );
+  ALTER TABLE projects ADD COLUMN IF NOT EXISTS share_id TEXT UNIQUE;
 `;
 
 type Row = {
@@ -17,6 +18,7 @@ type Row = {
   name: string;
   transcript: string;
   plan: Plan;
+  share_id: string | null;
   updated_at: Date;
 };
 
@@ -25,6 +27,7 @@ const toProject = (row: Row): Project => ({
   name: row.name,
   transcript: row.transcript,
   plan: row.plan,
+  shareId: row.share_id,
   updatedAt: row.updated_at.toISOString(),
 });
 
@@ -72,6 +75,22 @@ export async function openStore(dataDir?: string) {
           fields.plan ? JSON.stringify(fields.plan) : null,
           fields.transcript ?? null,
         ],
+      );
+      return rows[0] && toProject(rows[0]);
+    },
+
+    async getShared(shareId: string): Promise<Project | undefined> {
+      const { rows } = await db.query<Row>('SELECT * FROM projects WHERE share_id = $1', [shareId]);
+      return rows[0] && toProject(rows[0]);
+    },
+
+    // Keeps an existing link working, and null turns sharing off.
+    async setShare(id: string, enabled: boolean): Promise<Project | undefined> {
+      const { rows } = await db.query<Row>(
+        enabled
+          ? 'UPDATE projects SET share_id = COALESCE(share_id, $2) WHERE id = $1 RETURNING *'
+          : 'UPDATE projects SET share_id = NULL WHERE id = $1 RETURNING *',
+        enabled ? [id, crypto.randomUUID()] : [id],
       );
       return rows[0] && toProject(rows[0]);
     },

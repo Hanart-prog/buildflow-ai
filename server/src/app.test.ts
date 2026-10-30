@@ -156,6 +156,41 @@ describe('projects API', () => {
     expect(res.status).toBe(404);
   });
 
+  it('shares a read-only copy without the transcript, and can stop', async () => {
+    const project = await newProject();
+    finished(await generate(`${base}/projects/${project.id}/generate`, { text: 'private words' }));
+
+    const { shareId } = await (await send(`${base}/projects/${project.id}/share`, 'POST')).json();
+    const again = await (await send(`${base}/projects/${project.id}/share`, 'POST')).json();
+    expect(again.shareId).toBe(shareId);
+
+    const shared = await (await fetch(`${base}/shared/${shareId}`)).json();
+    expect(shared.plan.requirements.length).toBeGreaterThan(0);
+    expect(JSON.stringify(shared)).not.toContain('private words');
+
+    expect((await send(`${base}/projects/${project.id}/share`, 'DELETE')).status).toBe(204);
+    expect((await fetch(`${base}/shared/${shareId}`)).status).toBe(404);
+  });
+
+  it('needs the password for everything except shared links', async () => {
+    const locked = createApp(store, demoLlm, { password: 'open sesame' }).listen(0);
+    const url = urlOf(locked);
+    const project = await newProject();
+    const { shareId } = await (await send(`${base}/projects/${project.id}/share`, 'POST')).json();
+    const auth = (secret: string) => ({
+      headers: { authorization: `Basic ${Buffer.from(`x:${secret}`).toString('base64')}` },
+    });
+
+    const statuses = [
+      (await fetch(`${url}/projects`)).status,
+      (await fetch(`${url}/projects`, auth('wrong'))).status,
+      (await fetch(`${url}/projects`, auth('open sesame'))).status,
+      (await fetch(`${url}/shared/${shareId}`)).status,
+    ];
+    locked.close();
+    expect(statuses).toEqual([401, 401, 200, 200]);
+  });
+
   it('rejects an unknown scope', async () => {
     const project = await newProject();
     const res = await send(`${base}/projects/${project.id}/generate`, 'POST', { text: 'x', scope: 'nope' });
