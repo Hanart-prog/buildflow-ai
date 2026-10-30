@@ -1,5 +1,6 @@
 import type {
   BoardName,
+  Focus,
   GenerateEvent,
   NodeDetails,
   Plan,
@@ -57,10 +58,10 @@ const generate = async (
   text: string,
   scope: Scope,
   onEvent: (event: Exclude<GenerateEvent, Terminal>) => void,
-  source?: string,
+  extra: { source?: string; focus?: Focus; askQuestions?: boolean } = {},
 ) =>
   readStream<GenerateEvent>(
-    await fetch(`/api/projects/${id}/generate`, json('POST', { text, scope, source })),
+    await fetch(`/api/projects/${id}/generate`, json('POST', { text, scope, ...extra })),
     onEvent,
   );
 

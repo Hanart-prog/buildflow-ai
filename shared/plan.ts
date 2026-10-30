@@ -6,7 +6,8 @@ export const requirementSchema = z.object({
   type: z.enum(['functional', 'non-functional', 'constraint', 'open-question']),
 });
 
-// A follow-up question. An answer becomes a decision once a build has used it.
+// A follow-up question. An answer becomes a decision once a build has used it;
+// one that goes unanswered is skipped, and stays only so it is never asked again.
 export const questionSchema = z.object({
   id: z.string().min(1),
   topic: z.string().min(1),
@@ -14,6 +15,7 @@ export const questionSchema = z.object({
   options: z.array(z.string()).default([]),
   answer: z.string().optional(),
   used: z.boolean().optional(),
+  skipped: z.boolean().optional(),
 });
 
 export const nodeDetailsSchema = z.object({
@@ -59,6 +61,13 @@ export const planSchema = z.object({
 // A project plans a whole product; a feature plans one addition to a product.
 export const scopeSchema = z.enum(['project', 'feature']);
 
+// The node a build should attach to, when the user is extending just one.
+export const focusSchema = z.object({
+  board: z.enum(['system', 'features', 'roadmap']),
+  nodeId: z.string().min(1),
+});
+
+export type Focus = z.infer<typeof focusSchema>;
 export type Scope = z.infer<typeof scopeSchema>;
 export type Requirement = z.infer<typeof requirementSchema>;
 export type Question = z.infer<typeof questionSchema>;

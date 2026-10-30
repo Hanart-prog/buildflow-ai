@@ -1,9 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { Board, BoardName, Plan, Project, ProjectSummary, Question, Scope } from '../../shared/plan';
+import type {
+  Board,
+  BoardName,
+  Focus,
+  Plan,
+  Project,
+  ProjectSummary,
+  Question,
+  Scope,
+} from '../../shared/plan';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
+import { Questions } from './Questions';
 import type { LiveBoard } from './liveBuild';
 import { useRecorder } from './useRecorder';
 
@@ -20,8 +30,8 @@ const SCOPES: { name: Scope; label: string }[] = [
 
 const SAVE_DELAY_MS = 600;
 const UNTITLED = 'Untitled idea';
-// Answering these brings up the next ones, so the list stays short.
-const QUESTIONS_SHOWN = 4;
+// Plans from before questions were limited can hold a long backlog.
+const QUESTIONS_SHOWN = 3;
 const NO_FRESH: Record<BoardName, string[]> = { system: [], features: [], roadmap: [] };
 const NO_COUNTS: Record<BoardName, number> = { system: 0, features: 0, roadmap: 0 };
 
@@ -35,32 +45,6 @@ const nameFrom = (speech: string) => {
   const words = speech.trim().split(/\s+/);
   return words.slice(0, 6).join(' ') + (words.length > 6 ? '…' : '');
 };
-
-const QuestionCard = ({ question, onAnswer }: { question: Question; onAnswer: (answer: string) => void }) => (
-  <li className="question">
-    <span>{question.topic}</span>
-    <p>{question.text}</p>
-    {question.options.length > 0 && (
-      <div className="answers">
-        {question.options.map((option) => (
-          <button
-            key={option}
-            className={question.answer === option ? 'active' : ''}
-            onClick={() => onAnswer(option)}
-          >
-            {option}
-          </button>
-        ))}
-      </div>
-    )}
-    <input
-      aria-label={question.text}
-      placeholder="Or say it your way"
-      value={question.options.includes(question.answer ?? '') ? '' : (question.answer ?? '')}
-      onChange={(e) => onAnswer(e.target.value)}
-    />
-  </li>
-);
 
 const newNodeIds = (before: Plan, after: Plan) => {
   const fresh = { ...NO_FRESH };
@@ -81,8 +65,10 @@ export function App() {
   const [revision, setRevision] = useState(0);
   const [speech, setSpeech] = useState('');
   const [chosenScope, setChosenScope] = useState<Scope | null>(null);
+  const [focus, setFocus] = useState<(Focus & { label: string }) | null>(null);
   const [busy, setBusy] = useState<'transcribing' | 'reading' | 'mapping' | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [notesOpen, setNotesOpen] = useState(false);
   const [placed, setPlaced] = useState<number | null>(null);
   // Nodes streamed so far per board, shown on the tabs until the plan lands.
   const [streamed, setStreamed] = useState(NO_COUNTS);
@@ -94,6 +80,7 @@ export function App() {
   const fresh = useRef(NO_FRESH);
   const live = useRef<LiveBoard | null>(null);
   const orb = useRef<HTMLButtonElement>(null);
+  const composer = useRef<HTMLTextAreaElement>(null);
 
   const flushSave = useCallback(async () => {
     const pending = pendingSave.current;
@@ -116,6 +103,7 @@ export function App() {
     setRevision((r) => r + 1);
     setSpeech('');
     setChosenScope(null);
+    setFocus(null);
     setPlaced(null);
   };
 
@@ -188,11 +176,8 @@ export function App() {
   const onBoardChange = (name: BoardName, board: Board) =>
     updatePlan((plan) => ({ ...plan, boards: { ...plan.boards, [name]: board } }));
 
-  const answerQuestion = (id: string, answer: string) =>
-    updatePlan((plan) => ({
-      ...plan,
-      questions: plan.questions.map((q) => (q.id === id ? { ...q, answer: answer || undefined } : q)),
-    }));
+  const changeQuestions = (change: (q: Question) => Question) =>
+    updatePlan((plan) => ({ ...plan, questions: plan.questions.map(change) }));
 
   const { recording, start, stop } = useRecorder(
     (audio) =>
@@ -215,10 +200,17 @@ export function App() {
   // A feature needs a product to attach to, whether planned here or dropped in.
   const scope = nodeCount > 0 ? (chosenScope ?? 'feature') : 'project';
   const questions = project?.plan.questions ?? [];
-  const openQuestions = questions.filter((q) => !q.used);
+  const openQuestions = questions.filter((q) => !q.used && !q.skipped).slice(-QUESTIONS_SHOWN);
   const decisions = questions.filter((q) => q.used && q.answer);
 
-  const build = (text: string, buildScope: Scope, name: string, source?: string) => guard(async () => {
+  const build = (
+    text: string,
+    buildScope: Scope,
+    name: string,
+    extra: { source?: string; askQuestions?: boolean } = {},
+  ) => guard(async () => {
+    // The board being added to is the one drawn live.
+    const board = focus?.board ?? 'system';
     setBusy('reading');
     try {
       await flushSave();
@@ -229,8 +221,9 @@ export function App() {
         setProjects((list) => list.map((p) => (p.id === id ? { ...p, name } : p)));
       }
       const before = target.plan;
-      setTab('system');
+      setTab(board);
       setPreviewing(false);
+      if (focus) live.current?.focusOn(focus.nodeId);
       setStreamed(NO_COUNTS);
       try {
         const updated = await api.generate(target.id, text, buildScope, (event) => {
@@ -246,22 +239,23 @@ export function App() {
           setStreamed((counts) =>
             event.type === 'node' ? { ...counts, [event.board]: counts[event.board] + 1 } : counts,
           );
-          if (event.board === 'system') {
+          if (event.board === board) {
             live.current?.add(event.type === 'node' ? { node: event.node } : { edge: event.edge });
           }
-        }, source);
+        }, { ...extra, focus: focus ? { board: focus.board, nodeId: focus.nodeId } : undefined });
         fresh.current = newNodeIds(before, updated.plan);
         setProject(updated);
         setStreamed(NO_COUNTS);
-        setDrawing('system');
+        setDrawing(board);
         if (live.current) {
-          fresh.current = { ...fresh.current, system: [] };
-          await live.current.finish(updated.plan.boards.system);
+          fresh.current = { ...fresh.current, [board]: [] };
+          await live.current.finish(updated.plan.boards[board]);
         } else {
           setRevision((r) => r + 1);
         }
         setSpeech('');
         setChosenScope(null);
+        setFocus(null);
       } catch (e) {
         // Whatever was drawn or streamed so far was never saved.
         live.current?.dispose();
@@ -278,19 +272,24 @@ export function App() {
     }
   })();
 
-  const generate = () => build(speech, scope, nameFrom(speech));
+  const generate = () => build(speech, focus ? 'feature' : scope, nameFrom(speech));
+
+  const extendNode = (nodeId: string, label: string) => {
+    setFocus({ board: tab, nodeId, label });
+    composer.current?.focus();
+  };
 
   const useAnswers = () => {
     const fresh = openQuestions.filter((q) => q.answer);
     const text = fresh.map((q) => `${q.text} ${q.answer}`).join('\n');
-    if (project) build(text, 'project', project.name);
+    if (project) build(text, 'project', project.name, { askQuestions: false });
   };
 
   const importFiles = (read: () => Promise<{ name: string; source: string | null }>) =>
     guard(async () => {
       const { name, source } = await read();
       if (!source) throw new Error('No readable project files were found in that drop.');
-      await build('Map this existing product and what it already does.', 'project', name, source);
+      await build('Map this existing product and what it already does.', 'project', name, { source });
     })();
 
   const onDrop = (e: React.DragEvent) => {
@@ -352,6 +351,7 @@ export function App() {
           board={project.plan.boards[tab]}
           projectId={project.id}
           onFlush={flushSave}
+          onExtend={extendNode}
           fresh={fresh.current[tab]}
           live={live}
           onChange={(board) => onBoardChange(tab, board)}
@@ -395,6 +395,7 @@ export function App() {
                 onClick={() => {
                   setTab(t.name);
                   setPreviewing(false);
+                  setFocus(null);
                 }}
                 disabled={busy !== null || placed !== null || drafting}
               >
@@ -404,7 +405,10 @@ export function App() {
             ))}
             <button
               className={previewing ? 'active' : ''}
-              onClick={() => setPreviewing(true)}
+              onClick={() => {
+                setPreviewing(true);
+                setFocus(null);
+              }}
               disabled={busy !== null || placed !== null}
             >
               Preview
@@ -435,48 +439,55 @@ export function App() {
         </div>
       )}
 
-      {(requirements.length > 0 || questions.length > 0) && !hero && !previewing && (
-        <aside className="heard">
-          {openQuestions.length > 0 && (
-            <>
-              <h3>A few questions</h3>
+      {!hero && !previewing && (requirements.length > 0 || decisions.length > 0) && (
+        <div className="rail">
+          <button
+            className={`notes-toggle${notesOpen ? ' active' : ''}`}
+            aria-expanded={notesOpen}
+            onClick={() => setNotesOpen((open) => !open)}
+          >
+            Notes <span>{requirements.length + decisions.length}</span>
+          </button>
+          {notesOpen ? (
+            <aside className="rail-panel notes">
+              {decisions.length > 0 && (
+                <>
+                  <h3>Decided</h3>
+                  <ul>
+                    {decisions.map((q) => (
+                      <li key={q.id} className="req-decision">
+                        <span>{q.topic}</span>
+                        {q.answer}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+              <h3>What I heard</h3>
               <ul>
-                {openQuestions.slice(0, QUESTIONS_SHOWN).map((q) => (
-                  <QuestionCard key={q.id} question={q} onAnswer={(a) => answerQuestion(q.id, a)} />
-                ))}
-              </ul>
-              <button
-                className="primary"
-                onClick={useAnswers}
-                disabled={!openQuestions.some((q) => q.answer) || busy !== null || placed !== null}
-              >
-                Use my answers
-              </button>
-            </>
-          )}
-          {decisions.length > 0 && (
-            <>
-              <h3>Decided</h3>
-              <ul>
-                {decisions.map((q) => (
-                  <li key={q.id} className="req-decision">
-                    <span>{q.topic}</span>
-                    {q.answer}
+                {requirements.map((r) => (
+                  <li key={r.id} className={`req-${r.type}`}>
+                    <span>{r.type.replace('-', ' ')}</span>
+                    {r.text}
                   </li>
                 ))}
               </ul>
-            </>
+            </aside>
+          ) : (
+            openQuestions.length > 0 && (
+              <Questions
+                questions={openQuestions}
+                busy={busy !== null || placed !== null}
+                onAnswer={(id, answer) => changeQuestions((q) => (q.id === id ? { ...q, answer } : q))}
+                onSkip={(id) => changeQuestions((q) => (q.id === id ? { ...q, skipped: true } : q))}
+                onDismiss={() =>
+                  changeQuestions((q) => (openQuestions.includes(q) ? { ...q, skipped: true } : q))
+                }
+                onApply={useAnswers}
+              />
+            )
           )}
-          <h3>What I heard</h3>
-          <ul>
-            {requirements.map((r, i) => (
-              <li key={r.id} className={`req-${r.type}`} style={{ animationDelay: `${i * 40}ms` }}>
-                <span>{r.type.replace('-', ' ')}</span>
-                {r.text}
-              </li>
-            ))}
-          </ul>
-        </aside>
+        </div>
       )}
 
       {status && (
@@ -528,13 +539,16 @@ export function App() {
             </svg>
           </button>
           <textarea
+            ref={composer}
             aria-label="Describe your idea"
             placeholder={
               busy === 'transcribing'
                 ? 'Transcribing…'
                 : recording
                   ? 'Listening…'
-                  : scope === 'feature'
+                  : focus
+                    ? `What should "${focus.label}" do next?`
+                    : scope === 'feature'
                     ? 'Describe the feature to add…'
                     : 'Talk, or type your idea here…'
             }
@@ -543,7 +557,15 @@ export function App() {
             rows={hero ? 3 : 2}
           />
           <div className="composer-actions">
-            {nodeCount > 0 && (
+            {focus && (
+              <div className="focus-chip">
+                Building on <b>{focus.label}</b>
+                <button aria-label="Stop building on this node" onClick={() => setFocus(null)} disabled={busy !== null}>
+                  ×
+                </button>
+              </div>
+            )}
+            {nodeCount > 0 && !focus && (
               <div className="scope" role="radiogroup" aria-label="What to plan">
                 {SCOPES.map((s) => (
                   <button

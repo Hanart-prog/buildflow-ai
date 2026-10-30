@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { z, ZodError } from 'zod';
-import { planSchema, scopeSchema, type GenerateEvent, type PreviewEvent } from '../../shared/plan';
+import { focusSchema, planSchema, scopeSchema, type GenerateEvent, type PreviewEvent } from '../../shared/plan';
 import type { Store } from './db';
 import { HttpError } from './errors';
 import type { Llm } from './llm';
@@ -16,11 +16,10 @@ const generateSchema = z.object({
   text: z.string().trim().min(1),
   scope: scopeSchema.default('project'),
   source: z.string().max(20000).optional(),
+  focus: focusSchema.optional(),
+  askQuestions: z.boolean().default(true),
 });
-const detailsSchema = z.object({
-  board: z.enum(['system', 'features', 'roadmap']),
-  nodeId: z.string().min(1),
-});
+const detailsSchema = focusSchema;
 
 // OpenAI's transcription endpoint rejects files over 25 MB.
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -65,8 +64,11 @@ export function createApp(store: Store, llm: Llm) {
   });
 
   app.post('/api/projects/:id/generate', async (req, res) => {
-    const { text, scope, source } = generateSchema.parse(req.body);
+    const { text, scope, source, focus, askQuestions } = generateSchema.parse(req.body);
     const project = await findProject(req.params.id);
+    if (focus && !project.plan.boards[focus.board].nodes.some((n) => n.id === focus.nodeId)) {
+      throw new HttpError(404, 'That node no longer exists');
+    }
     const send = (event: GenerateEvent) => {
       if (!res.headersSent) res.type('application/x-ndjson');
       res.write(`${JSON.stringify(event)}\n`);
@@ -78,6 +80,8 @@ export function createApp(store: Store, llm: Llm) {
       const plan = await runPipeline(text, project.plan, llm.complete, {
         scope,
         source,
+        focus,
+        askQuestions,
         onRequirements: (requirements, questions) =>
           send({ type: 'requirements', requirements, questions }),
         onItem: send,

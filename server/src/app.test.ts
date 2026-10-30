@@ -138,6 +138,24 @@ describe('projects API', () => {
     expect((await send(url, 'POST', { board: 'system', nodeId: 'nope' })).status).toBe(404);
   });
 
+  it('attaches a build to the chosen node on the chosen board', async () => {
+    const project = await newProject();
+    const url = `${base}/projects/${project.id}/generate`;
+    finished(await generate(url, { text: 'the product' }));
+
+    const focus = { board: 'features', nodeId: 'epic-discovery' };
+    const after = finished(await generate(url, { text: 'meal planning', scope: 'feature', focus }));
+
+    expect(after.plan.boards.features.edges.map((e) => e.id)).toContain('epic-discovery->epic-planning');
+  });
+
+  it('rejects a focus on a node that is gone', async () => {
+    const project = await newProject();
+    const focus = { board: 'system', nodeId: 'gone' };
+    const res = await send(`${base}/projects/${project.id}/generate`, 'POST', { text: 'x', focus });
+    expect(res.status).toBe(404);
+  });
+
   it('rejects an unknown scope', async () => {
     const project = await newProject();
     const res = await send(`${base}/projects/${project.id}/generate`, 'POST', { text: 'x', scope: 'nope' });

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { emptyPlan, parseScreens, type Plan } from '../../shared/plan';
 import { keepPaletteOnly } from '../../shared/screenKit';
 import { createBoardScanner, type ScannedItem } from './boardScanner';
-import { DETAILS_SYSTEM, EXTRACT_SYSTEM, runDetails, runPipeline, runPreview, type Complete } from './pipeline';
+import { DETAILS_SYSTEM, EXTRACT_SYSTEM, attachToFocus, runDetails, runPipeline, runPreview, type Complete } from './pipeline';
 
 const extraction = { requirements: [{ id: 'req-a', text: 'Users can log in.', type: 'functional' }] };
 const emptyBoard = { nodes: [], edges: [] };
@@ -66,7 +66,25 @@ describe('questions and details', () => {
     expect(inputs.map((i) => i.decisions)).toEqual([['Which stack? Rails'], ['Which stack? Rails']]);
     expect(plan.questions.map((q) => q.id)).toEqual(['q-old', 'q-open', 'q-new']);
     expect(plan.questions[0].used).toBe(true);
+    expect(plan.questions[1]).toMatchObject({ skipped: true });
     expect(plan.questions[1].used).toBeUndefined();
+  });
+
+  it('never asks more than 3 questions at once', async () => {
+    const many = { ...extraction, questions: ['a', 'b', 'c', 'd', 'e'].map((id) => ({ id, topic: 'Design', text: id, options: [] })) };
+    const plan = await runPipeline('x', emptyPlan(), scripted(JSON.stringify(many), JSON.stringify(mapping)));
+    expect(plan.questions).toHaveLength(3);
+  });
+
+  it('asks nothing new on a build that only uses answers', async () => {
+    const inputs: { askQuestions: boolean }[] = [];
+    const replies = [JSON.stringify(withQuestion), JSON.stringify(mapping)];
+    const plan = await runPipeline('answers', emptyPlan(), async (_s, user) => {
+      inputs.push(JSON.parse(user));
+      return replies.shift()!;
+    }, { askQuestions: false });
+    expect(inputs[0].askQuestions).toBe(false);
+    expect(plan.questions).toEqual([]);
   });
 
   it('handles plans saved before questions existed', async () => {
@@ -108,6 +126,64 @@ describe('questions and details', () => {
 
     expect(details.summary).toBe('s');
     expect(JSON.parse(input)).toMatchObject({ connections: ['Web -> API (REST)'], decisions: ['Stack? Go'] });
+  });
+});
+
+describe('extending one node', () => {
+  const node = (id: string) => ({ id, label: id, description: '', kind: 'service' });
+  const before = { nodes: [node('focus'), node('other')], edges: [] };
+
+  it('links only the new nodes nothing else reaches', () => {
+    const after = {
+      nodes: [...before.nodes, node('a'), node('b'), node('c')],
+      edges: [
+        { id: 'focus->a', source: 'focus', target: 'a' },
+        { id: 'a->b', source: 'a', target: 'b' },
+      ],
+    };
+    expect(attachToFocus(before, after, 'focus').edges.map((e) => e.id)).toEqual([
+      'focus->a',
+      'a->b',
+      'focus->c',
+    ]);
+  });
+
+  it('links a new branch the model hung off a different node', () => {
+    const after = {
+      nodes: [...before.nodes, node('a'), node('b')],
+      edges: [
+        { id: 'other->a', source: 'other', target: 'a' },
+        { id: 'a->b', source: 'a', target: 'b' },
+      ],
+    };
+    expect(attachToFocus(before, after, 'focus').edges.map((e) => e.id)).toEqual([
+      'other->a',
+      'a->b',
+      'focus->a',
+    ]);
+  });
+
+  it('leaves a node that already feeds into the focus alone', () => {
+    const after = {
+      nodes: [...before.nodes, node('a')],
+      edges: [{ id: 'a->focus', source: 'a', target: 'focus' }],
+    };
+    expect(attachToFocus(before, after, 'focus').edges).toHaveLength(1);
+  });
+
+  it('tells both stages about the focus and attaches on that board only', async () => {
+    const existing = emptyPlan();
+    existing.boards.system.nodes = [node('web')];
+    const inputs: { focus: { label: string } }[] = [];
+    const replies = [JSON.stringify(extraction), JSON.stringify(mapping)];
+    const plan = await runPipeline('add', existing, async (_s, user) => {
+      inputs.push(JSON.parse(user));
+      return replies.shift()!;
+    }, { focus: { board: 'system', nodeId: 'web' } });
+
+    expect(inputs.map((i) => i.focus.label)).toEqual(['web', 'web']);
+    expect(plan.boards.system.edges.map((e) => e.id)).toEqual(['web->api']);
+    expect(plan.boards.features.edges).toEqual([]);
   });
 });
 

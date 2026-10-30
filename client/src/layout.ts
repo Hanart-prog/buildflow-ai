@@ -19,7 +19,7 @@ const bounds = (nodes: Board['nodes']) => ({
 
 // With force set every node is repositioned; otherwise only nodes that have
 // never been placed move, so a generation leaves the user's arrangement alone.
-export function layoutBoard(board: Board, name: BoardName, force = false): Board {
+export function layoutBoard(board: Board, name: BoardName, force = false, anchorId?: string): Board {
   if (!force && board.nodes.every(placed)) return board;
 
   const graph = new dagre.graphlib.Graph();
@@ -42,9 +42,16 @@ export function layoutBoard(board: Board, name: BoardName, force = false): Board
   if (keep.length > 0) {
     const old = bounds(keep);
     const fresh = bounds(added);
-    const [dx, dy] = isHorizontal(name)
-      ? [old.left - fresh.left, old.bottom + GROUP_GAP - fresh.top]
-      : [old.right + GROUP_GAP - fresh.left, old.top - fresh.top];
+    const anchor = keep.find((n) => n.id === anchorId);
+    // Work on one node sits just below the board, lined up with that node.
+    const [dx, dy] = anchor
+      ? [
+          anchor.x! - (fresh.left + fresh.right) / 2 + (isHorizontal(name) ? NODE_WIDTH : 0),
+          old.bottom + GROUP_GAP - fresh.top,
+        ]
+      : isHorizontal(name)
+        ? [old.left - fresh.left, old.bottom + GROUP_GAP - fresh.top]
+        : [old.right + GROUP_GAP - fresh.left, old.top - fresh.top];
     added.forEach((n) => {
       n.x += dx;
       n.y += dy;

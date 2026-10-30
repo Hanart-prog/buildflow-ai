@@ -13,6 +13,7 @@ export type BoardItem = { node: PlanNode } | { edge: PlanEdge };
 export type LiveBoard = {
   add: (item: BoardItem) => void;
   finish: (final: Board) => Promise<void>;
+  focusOn: (nodeId: string) => void;
   dispose: () => void;
 };
 
@@ -52,9 +53,9 @@ export const toBoard = (json: WorkflowJSON): Board => ({
 // Screen space the floating panels cover, so fitted nodes land clear of them.
 const fitMargins = () => ({
   top: 96,
-  right: 40,
+  right: document.querySelector('.inspector') ? 400 : 40,
   bottom: 170,
-  left: window.innerWidth > 900 ? 345 : 30,
+  left: window.innerWidth > 900 && document.querySelector('.rail-panel') ? 345 : 30,
 });
 
 function fitPoints(ctx: FreeLayoutPluginContext, points: Point[], easing: boolean) {
@@ -73,9 +74,9 @@ function fitPoints(ctx: FreeLayoutPluginContext, points: Point[], easing: boolea
     (screenWidth - left - right) / width,
     (screenHeight - top - bottom) / height,
   );
-  // Fits to a slack rectangle around the nodes that matches the panel margins.
-  const slackX = (screenWidth / zoom - width) * (left / (left + right));
-  const slackY = (screenHeight / zoom - height) * (top / (top + bottom));
+  // Fits to a screen-sized rectangle that centres the nodes in the free space.
+  const slackX = (left + (screenWidth - left - right - width * zoom) / 2) / zoom;
+  const slackY = (top + (screenHeight - top - bottom - height * zoom) / 2) / zoom;
   const view = new Rectangle(x - slackX, y - slackY, screenWidth / zoom, screenHeight / zoom);
   ctx.playground.config.fitView(view, easing, 0);
 }
@@ -99,8 +100,8 @@ export function createLiveBuild(
   start: Board,
   hooks: Hooks,
 ) {
-  const nodes = [...start.nodes];
-  const edges = [...start.edges];
+  let nodes = [...start.nodes];
+  let edges = [...start.edges];
   const fixed = new Set(start.nodes.map((n) => n.id));
   const current = new Map<string, Point>();
   const targets = new Map<string, Point>();
@@ -110,15 +111,20 @@ export function createLiveBuild(
   let pump: number | undefined;
   let frame: number | undefined;
   let final: { board: Board; resolve: () => void } | undefined;
+  let focusId: string | undefined;
 
-  const allPoints = () => [
-    ...start.nodes.map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })),
+  // Work on one node is framed with that node, so it stays readable however
+  // large the board is.
+  const framed = () => [
+    ...nodes
+      .filter((n) => fixed.has(n.id) && (!focusId || n.id === focusId))
+      .map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })),
     ...targets.values(),
   ];
 
   const relayout = () => {
     const unplaced = nodes.map((n) => (fixed.has(n.id) ? n : { ...n, x: undefined, y: undefined }));
-    layoutBoard({ nodes: unplaced, edges }, name)
+    layoutBoard({ nodes: unplaced, edges }, name, false, focusId)
       .nodes.filter((n) => !fixed.has(n.id))
       .forEach((n) => targets.set(n.id, { x: n.x!, y: n.y! }));
   };
@@ -166,7 +172,7 @@ export function createLiveBuild(
         data: { label: edge.label },
       });
     }
-    fitPoints(ctx, allPoints(), !reducedMotion());
+    fitPoints(ctx, framed(), !reducedMotion());
     frame ??= requestAnimationFrame(glide);
   };
 
@@ -199,8 +205,13 @@ export function createLiveBuild(
     ctx.playground.config.readonly = false;
     ctx.document.linesManager.forceUpdate();
     hooks.onDone(toBoard(ctx.document.toJSON()));
-    fit(ctx);
-    final?.resolve();
+    if (focusId) fitPoints(ctx, framed(), !reducedMotion());
+    else fit(ctx);
+    const finished = final;
+    final = undefined;
+    focusId = undefined;
+    started = false;
+    finished?.resolve();
   };
 
   const step = () => {
@@ -218,6 +229,16 @@ export function createLiveBuild(
 
   const wake = () => {
     if (!started) {
+      // The canvas stays open between builds and may have been edited by hand,
+      // so everything on it now counts as placed and must not move.
+      const now = toBoard(ctx.document.toJSON());
+      nodes = now.nodes;
+      edges = now.edges;
+      fixed.clear();
+      nodes.forEach((n) => fixed.add(n.id));
+      targets.clear();
+      current.clear();
+      placed = 0;
       started = true;
       ctx.playground.config.readonly = true;
       hooks.onStart();
@@ -226,6 +247,9 @@ export function createLiveBuild(
   };
 
   return {
+    focusOn(nodeId: string) {
+      focusId = nodeId;
+    },
     add(item: BoardItem) {
       queue.push(item);
       wake();
