@@ -87,6 +87,11 @@ export type Board = z.infer<typeof boardSchema>;
 export type Plan = z.infer<typeof planSchema>;
 export type BoardName = keyof Plan['boards'];
 
+export type User = {
+  id: string;
+  email: string;
+};
+
 export type ProjectSummary = {
   id: string;
   name: string;

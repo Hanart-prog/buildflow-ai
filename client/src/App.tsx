@@ -8,13 +8,16 @@ import type {
   ProjectSummary,
   Question,
   Scope,
+  User,
 } from '../../shared/plan';
+import { AccountMenu } from './AccountMenu';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import { ExportMenu } from './ExportMenu';
 import { HowItWorks } from './HowItWorks';
 import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
+import { ProjectMenu } from './ProjectMenu';
 import { Questions } from './Questions';
 import type { LiveBoard } from './liveBuild';
 import { ThemeToggle } from './ThemeToggle';
@@ -59,7 +62,20 @@ const newNodeIds = (before: Plan, after: Plan) => {
   return fresh;
 };
 
-export function App() {
+// Where you are lives in the address, so a refresh lands back in the same place.
+function viewInAddress() {
+  const params = new URLSearchParams(window.location.search);
+  const view = params.get('view');
+  return {
+    id: params.get('project'),
+    tab: TABS.find((t) => t.name === view)?.name,
+    previewing: view === 'preview',
+  };
+}
+
+type AppProps = { user: User; idea?: string; onLogout: () => void };
+
+export function App({ user, idea, onLogout }: AppProps) {
   const { theme, toggle: toggleTheme } = useTheme();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
@@ -68,7 +84,7 @@ export function App() {
   const [drafting, setDrafting] = useState(false);
   // Bumped when a plan arrives from the server, so the canvas rebuilds from it.
   const [revision, setRevision] = useState(0);
-  const [speech, setSpeech] = useState('');
+  const [speech, setSpeech] = useState(idea ?? '');
   const [chosenScope, setChosenScope] = useState<Scope | null>(null);
   const [focus, setFocus] = useState<(Focus & { label: string }) | null>(null);
   const [busy, setBusy] = useState<'transcribing' | 'reading' | 'mapping' | null>(null);
@@ -85,6 +101,7 @@ export function App() {
   const [drawing, setDrawing] = useState<BoardName | null>(null);
   const [saveState, setSaveState] = useState<'saved' | 'saving' | 'failed'>('saved');
   const [error, setError] = useState<string | null>(null);
+  const [restored, setRestored] = useState(false);
 
   const pendingSave = useRef<{ id: string; plan: Plan; timer: number } | null>(null);
   const fresh = useRef(NO_FRESH);
@@ -106,8 +123,8 @@ export function App() {
     }
   }, []);
 
-  const show = (next: Project | null) => {
-    setPreviewing(false);
+  const show = (next: Project | null, preview = false) => {
+    setPreviewing(preview);
     setUndoPlan(null);
     setRetry(null);
     setJump(undefined);
@@ -121,9 +138,9 @@ export function App() {
   };
 
   const open = useCallback(
-    async (id: string) => {
+    async (id: string, preview = false) => {
       await flushSave();
-      show(await api.get(id));
+      show(await api.get(id), preview);
     },
     [flushSave],
   );
@@ -141,9 +158,21 @@ export function App() {
     guard(async () => {
       const list = await api.list();
       setProjects(list);
-      if (list[0]) await open(list[0].id);
+      const view = viewInAddress();
+      if (!idea && list.some((p) => p.id === view.id)) {
+        if (view.tab) setTab(view.tab);
+        await open(view.id!, view.previewing);
+      }
+      setRestored(true);
     })();
   }, [open]);
+
+  const projectId = project?.id;
+  useEffect(() => {
+    if (!restored) return;
+    const view = previewing ? 'preview' : tab;
+    window.history.replaceState(null, '', projectId ? `/?project=${projectId}&view=${view}` : '/');
+  }, [restored, projectId, tab, previewing]);
 
   const startNew = guard(async () => {
     await flushSave();
@@ -157,6 +186,13 @@ export function App() {
     setProject(created);
     return created;
   };
+
+  const logOut = guard(async () => {
+    await flushSave();
+    await api.logout();
+    window.history.replaceState(null, '', '/');
+    onLogout();
+  });
 
   const deleteProject = guard(async () => {
     if (!project || !window.confirm(`Delete "${project.name}"?`)) return;
@@ -311,6 +347,10 @@ export function App() {
 
   const generate = () => build(speech, focus ? 'feature' : scope, nameFrom(speech));
 
+  useEffect(() => {
+    if (restored && idea) generate();
+  }, [restored]);
+
   const extendNode = (nodeId: string, label: string) => {
     setFocus({ board: tab, nodeId, label });
     composer.current?.focus();
@@ -413,23 +453,13 @@ export function App() {
             BuildFlow
           </button>
           {projects.length > 0 && (
-            <select
-              aria-label="Project"
-              value={project?.id ?? ''}
-              onChange={(e) => guard(() => open(e.target.value))()}
-            >
-              {!project && <option value="">New idea</option>}
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          )}
-          {project && (
-            <button className="quiet" onClick={deleteProject}>
-              Delete
-            </button>
+            <ProjectMenu
+              projects={projects}
+              current={project}
+              disabled={busy !== null || placed !== null || drafting}
+              onOpen={(id) => guard(() => open(id))()}
+              onDelete={deleteProject}
+            />
           )}
         </div>
 
@@ -470,11 +500,12 @@ export function App() {
               {saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}
             </span>
           )}
-          {project && undoPlan && !busy && placed === null && <button onClick={undoBuild}>Undo build</button>}
+          {project && undoPlan && !busy && placed === null && <button className="undo" onClick={undoBuild}>Undo build</button>}
           {project && !hero && (
             <ExportMenu key={project.id} project={project} onFlush={flushSave} onError={setError} />
           )}
           <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busy !== null || placed !== null} />
+          <AccountMenu user={user} disabled={busy !== null || placed !== null || drafting} onLogout={logOut} />
           {project && (
             <button className="new-project" onClick={startNew} disabled={busy !== null || placed !== null || drafting}>
               + New project
