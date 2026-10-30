@@ -13,10 +13,24 @@ const AUDIO_EXTENSIONS: Record<string, string> = {
   'audio/mpeg': 'mp3',
 };
 
-export function openAiLlm(apiKey: string): Llm {
-  const client = new OpenAI({ apiKey });
-  const model = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-  const transcribeModel = process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1';
+type Provider = { apiKey: string; baseURL?: string; model: string; transcribeModel: string };
+
+export const openAiProvider = (apiKey: string): Provider => ({
+  apiKey,
+  model: process.env.OPENAI_MODEL || 'gpt-4o-mini',
+  transcribeModel: process.env.OPENAI_TRANSCRIBE_MODEL || 'whisper-1',
+});
+
+// Groq has a free plan and speaks the same API as OpenAI.
+export const groqProvider = (apiKey: string): Provider => ({
+  apiKey,
+  baseURL: 'https://api.groq.com/openai/v1',
+  model: process.env.GROQ_MODEL || 'openai/gpt-oss-120b',
+  transcribeModel: process.env.GROQ_TRANSCRIBE_MODEL || 'whisper-large-v3-turbo',
+});
+
+export function providerLlm({ apiKey, baseURL, model, transcribeModel }: Provider): Llm {
+  const client = new OpenAI({ apiKey, baseURL });
 
   return {
     async complete(system, user) {
@@ -42,7 +56,7 @@ export function openAiLlm(apiKey: string): Llm {
 }
 
 const unavailable = async (): Promise<never> => {
-  throw new HttpError(503, 'Add OPENAI_API_KEY to .env, or set DEMO_MODE=true to try the canned demo.');
+  throw new HttpError(503, 'Add GROQ_API_KEY (free) or OPENAI_API_KEY to .env, or set DEMO_MODE=true to try the canned demo.');
 };
 
 export const missingKeyLlm: Llm = { complete: unavailable, transcribe: unavailable };
