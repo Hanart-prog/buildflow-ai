@@ -1,5 +1,5 @@
 import { Rectangle, type FreeLayoutPluginContext, type WorkflowJSON } from '@flowgram.ai/free-layout-editor';
-import type { Board, BoardName, PlanEdge, PlanNode } from '../../shared/plan';
+import { hiddenByCollapse, type Board, type BoardName, type PlanEdge, type PlanNode } from '../../shared/plan';
 import { NODE_HEIGHT, NODE_WIDTH, layoutBoard } from './layout';
 
 export const NODE_TYPE = 'card';
@@ -23,7 +23,7 @@ export const toNodeJson = (n: PlanNode) => ({
   id: n.id,
   type: NODE_TYPE,
   meta: { position: { x: n.x ?? 0, y: n.y ?? 0 } },
-  data: { label: n.label, description: n.description, kind: n.kind, details: n.details },
+  data: { label: n.label, description: n.description, kind: n.kind, details: n.details, collapsed: n.collapsed },
 });
 
 export const toEdgeJson = (e: PlanEdge) => ({
@@ -39,6 +39,7 @@ export const toBoard = (json: WorkflowJSON): Board => ({
     description: n.data.description ?? '',
     kind: n.data.kind,
     details: n.data.details,
+    collapsed: n.data.collapsed,
     x: n.meta?.position?.x,
     y: n.meta?.position?.y,
   })),
@@ -82,8 +83,23 @@ function fitPoints(ctx: FreeLayoutPluginContext, points: Point[], easing: boolea
 }
 
 export function fit(ctx: FreeLayoutPluginContext, easing = true) {
-  const { nodes } = ctx.document.toJSON();
-  fitPoints(ctx, nodes.map((n) => ({ x: n.meta?.position?.x ?? 0, y: n.meta?.position?.y ?? 0 })), easing);
+  const board = toBoard(ctx.document.toJSON());
+  const hidden = hiddenByCollapse(board);
+  const shown = board.nodes.filter((n) => !hidden.has(n.id));
+  fitPoints(ctx, shown.map((n) => ({ x: n.x ?? 0, y: n.y ?? 0 })), easing);
+}
+
+// FlowGram has no way to hide a node, so collapsed branches are hidden directly.
+export function applyCollapse(ctx: FreeLayoutPluginContext) {
+  const hidden = hiddenByCollapse(toBoard(ctx.document.toJSON()));
+  ctx.document.getAllNodes().forEach((node) => {
+    const element = node.renderData?.node;
+    if (element) element.style.display = hidden.has(node.id) ? 'none' : '';
+  });
+  ctx.document.linesManager.getAllLines().forEach((line) => {
+    const gone = hidden.has(line.from?.id ?? '') || hidden.has(line.to?.id ?? '');
+    line.node.style.display = gone ? 'none' : '';
+  });
 }
 
 type Hooks = {
