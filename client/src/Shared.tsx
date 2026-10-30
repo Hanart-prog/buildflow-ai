@@ -3,6 +3,8 @@ import type { BoardName, SharedPlan } from '../../shared/plan';
 import { api } from './api';
 import { BoardCanvas } from './BoardCanvas';
 import type { LiveBoard } from './liveBuild';
+import { ThemeToggle } from './ThemeToggle';
+import { useTheme } from './theme';
 
 const TABS: { name: BoardName; label: string }[] = [
   { name: 'system', label: 'System' },
@@ -11,6 +13,7 @@ const TABS: { name: BoardName; label: string }[] = [
 ];
 
 export function Shared({ shareId }: { shareId: string }) {
+  const { theme, toggle } = useTheme();
   const [shared, setShared] = useState<SharedPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<BoardName>('system');
@@ -27,7 +30,7 @@ export function Shared({ shareId }: { shareId: string }) {
   return (
     <div className="app">
       <BoardCanvas
-        key={`${tab}-${jump}`}
+        key={`${tab}-${jump}-${theme}`}
         name={tab}
         board={shared.plan.boards[tab]}
         plan={shared.plan}
@@ -64,6 +67,7 @@ export function Shared({ shareId }: { shareId: string }) {
         </nav>
         <div className="actions">
           <span className="save">View only</span>
+          <ThemeToggle theme={theme} onToggle={toggle} />
         </div>
       </header>
     </div>

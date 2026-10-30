@@ -16,6 +16,8 @@ import { readDrop, readPicked } from './importProject';
 import { Preview } from './Preview';
 import { Questions } from './Questions';
 import type { LiveBoard } from './liveBuild';
+import { ThemeToggle } from './ThemeToggle';
+import { useTheme } from './theme';
 import { useRecorder } from './useRecorder';
 
 const TABS: { name: BoardName; label: string }[] = [
@@ -57,6 +59,7 @@ const newNodeIds = (before: Plan, after: Plan) => {
 };
 
 export function App() {
+  const { theme, toggle: toggleTheme } = useTheme();
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   const [project, setProject] = useState<Project | null>(null);
   const [tab, setTab] = useState<BoardName>('system');
@@ -379,7 +382,7 @@ export function App() {
 
       {project && !previewing && (
         <BoardCanvas
-          key={`${project.id}-${tab}-${revision}`}
+          key={`${project.id}-${tab}-${revision}-${theme}`}
           name={tab}
           board={project.plan.boards[tab]}
           plan={project.plan}
@@ -400,7 +403,14 @@ export function App() {
 
       <header className="topbar">
         <div className="pill identity">
-          <span className="brand">BuildFlow</span>
+          <button
+            className="brand"
+            title="Back to the start screen"
+            onClick={startNew}
+            disabled={busy !== null || placed !== null || drafting}
+          >
+            BuildFlow
+          </button>
           {projects.length > 0 && (
             <select
               aria-label="Project"
@@ -453,27 +463,23 @@ export function App() {
           </nav>
         )}
 
-        {project && (
-          <div className="actions">
-            {!hero && (
-              <span className="save">
-                {saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}
-              </span>
-            )}
-            {undoPlan && !busy && placed === null && <button onClick={undoBuild}>Undo build</button>}
-            {!hero && (
-              <ExportMenu
-                key={project.id}
-                project={project}
-                onFlush={flushSave}
-                onError={setError}
-              />
-            )}
-            <button className="new-project" onClick={startNew}>
+        <div className="actions">
+          {project && !hero && (
+            <span className="save">
+              {saveState === 'failed' ? 'Save failed' : saveState === 'saving' ? 'Saving' : 'Saved'}
+            </span>
+          )}
+          {project && undoPlan && !busy && placed === null && <button onClick={undoBuild}>Undo build</button>}
+          {project && !hero && (
+            <ExportMenu key={project.id} project={project} onFlush={flushSave} onError={setError} />
+          )}
+          <ThemeToggle theme={theme} onToggle={toggleTheme} disabled={busy !== null || placed !== null} />
+          {project && (
+            <button className="new-project" onClick={startNew} disabled={busy !== null || placed !== null || drafting}>
               + New project
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </header>
 
       {error && (
@@ -547,95 +553,97 @@ export function App() {
       )}
 
       <section className={`dock${hero ? ' hero' : ''}`} hidden={previewing}>
-        {hero && (
-          <div className="hero-copy">
-            <h1>Say what you want to build.</h1>
-            <p>
-              Talk it through and watch the plan draw itself. Already built something? Drop the
-              project folder here, or{' '}
-              <label className="folder-link">
-                choose a folder
-                <input
-                  type="file"
-                  multiple
-                  hidden
-                  {...{ webkitdirectory: '' }}
-                  onChange={(e) => {
-                    const { files } = e.target;
-                    if (files?.length) importFiles(() => readPicked(files));
-                  }}
-                />
-              </label>
-              .
-            </p>
-          </div>
-        )}
-        <div className="composer" onKeyDown={onKeyDown}>
-          <button
-            ref={orb}
-            className={`orb${recording ? ' live' : ''}`}
-            aria-label={recording ? 'Stop recording' : 'Start talking'}
-            title={recording ? 'Stop recording' : 'Start talking'}
-            onClick={guard(recording ? async () => stop() : start)}
-            disabled={busy !== null}
-          >
-            <svg viewBox="0 0 24 24" aria-hidden="true">
-              {recording ? (
-                <rect x="7" y="7" width="10" height="10" rx="2" />
-              ) : (
-                <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4" />
-              )}
-            </svg>
-          </button>
-          <textarea
-            ref={composer}
-            aria-label="Describe your idea"
-            placeholder={
-              busy === 'transcribing'
-                ? 'Transcribing…'
-                : recording
-                  ? 'Listening…'
-                  : focus
-                    ? `What should "${focus.label}" do next?`
-                    : scope === 'feature'
-                    ? 'Describe the feature to add…'
-                    : 'Talk, or type your idea here…'
-            }
-            value={speech}
-            onChange={(e) => setSpeech(e.target.value)}
-            rows={hero ? 3 : 2}
-          />
-          <div className="composer-actions">
-            {focus && (
-              <div className="focus-chip">
-                Building on <b>{focus.label}</b>
-                <button aria-label="Stop building on this node" onClick={() => setFocus(null)} disabled={busy !== null}>
-                  ×
-                </button>
-              </div>
-            )}
-            {nodeCount > 0 && !focus && (
-              <div className="scope" role="radiogroup" aria-label="What to plan">
-                {SCOPES.map((s) => (
-                  <button
-                    key={s.name}
-                    role="radio"
-                    aria-checked={scope === s.name}
-                    className={scope === s.name ? 'active' : ''}
-                    onClick={() => setChosenScope(s.name)}
-                  >
-                    {s.label}
-                  </button>
-                ))}
-              </div>
-            )}
+        <div className="dock-main">
+          {hero && (
+            <div className="hero-copy">
+              <h1>Say what you want to build.</h1>
+              <p>
+                Talk it through and watch the plan draw itself. Already built something? Drop the
+                project folder here, or{' '}
+                <label className="folder-link">
+                  choose a folder
+                  <input
+                    type="file"
+                    multiple
+                    hidden
+                    {...{ webkitdirectory: '' }}
+                    onChange={(e) => {
+                      const { files } = e.target;
+                      if (files?.length) importFiles(() => readPicked(files));
+                    }}
+                  />
+                </label>
+                .
+              </p>
+            </div>
+          )}
+          <div className="composer" onKeyDown={onKeyDown}>
             <button
-              className="primary"
-              onClick={generate}
-              disabled={!speech.trim() || busy !== null || recording || placed !== null}
+              ref={orb}
+              className={`orb${recording ? ' live' : ''}`}
+              aria-label={recording ? 'Stop recording' : 'Start talking'}
+              title={recording ? 'Stop recording' : 'Start talking'}
+              onClick={guard(recording ? async () => stop() : start)}
+              disabled={busy !== null}
             >
-              {busy === 'reading' || busy === 'mapping' ? 'Building…' : 'Build it'}
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                {recording ? (
+                  <rect x="7" y="7" width="10" height="10" rx="2" />
+                ) : (
+                  <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3zM6 11a6 6 0 0 0 12 0M12 17v4" />
+                )}
+              </svg>
             </button>
+            <textarea
+              ref={composer}
+              aria-label="Describe your idea"
+              placeholder={
+                busy === 'transcribing'
+                  ? 'Transcribing…'
+                  : recording
+                    ? 'Listening…'
+                    : focus
+                      ? `What should "${focus.label}" do next?`
+                      : scope === 'feature'
+                      ? 'Describe the feature to add…'
+                      : 'Talk, or type your idea here…'
+              }
+              value={speech}
+              onChange={(e) => setSpeech(e.target.value)}
+              rows={hero ? 3 : 2}
+            />
+            <div className="composer-actions">
+              {focus && (
+                <div className="focus-chip">
+                  Building on <b>{focus.label}</b>
+                  <button aria-label="Stop building on this node" onClick={() => setFocus(null)} disabled={busy !== null}>
+                    ×
+                  </button>
+                </div>
+              )}
+              {nodeCount > 0 && !focus && (
+                <div className="scope" role="radiogroup" aria-label="What to plan">
+                  {SCOPES.map((s) => (
+                    <button
+                      key={s.name}
+                      role="radio"
+                      aria-checked={scope === s.name}
+                      className={scope === s.name ? 'active' : ''}
+                      onClick={() => setChosenScope(s.name)}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <button
+                className="primary"
+                onClick={generate}
+                disabled={!speech.trim() || busy !== null || recording || placed !== null}
+              >
+                {busy === 'reading' || busy === 'mapping' ? 'Building…' : 'Build it'}
+              </button>
+            </div>
           </div>
         </div>
       </section>
