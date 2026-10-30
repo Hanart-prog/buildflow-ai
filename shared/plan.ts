@@ -36,6 +36,10 @@ export const planSchema = z.object({
   }),
 });
 
+// A project plans a whole product; a feature plans one addition to a product.
+export const scopeSchema = z.enum(['project', 'feature']);
+
+export type Scope = z.infer<typeof scopeSchema>;
 export type Requirement = z.infer<typeof requirementSchema>;
 export type PlanNode = z.infer<typeof nodeSchema>;
 export type PlanEdge = z.infer<typeof edgeSchema>;
@@ -53,6 +57,12 @@ export type Project = ProjectSummary & {
   transcript: string;
   plan: Plan;
 };
+
+// One line of the newline-delimited JSON stream from the generate endpoint.
+export type GenerateEvent =
+  | { type: 'requirements'; requirements: Requirement[] }
+  | { type: 'done'; project: Project }
+  | { type: 'error'; error: string };
 
 export const emptyPlan = (): Plan => ({
   requirements: [],

@@ -55,6 +55,24 @@ describe('runPipeline', () => {
     expect(nodes.map((n) => n.id).sort()).toEqual(['api', 'manual', 'web']);
   });
 
+  it('passes the scope to both stages and reports requirements early', async () => {
+    const inputs: { scope: string }[] = [];
+    const replies = [JSON.stringify(extraction), JSON.stringify(mapping)];
+    const complete: Complete = async (_system, user) => {
+      inputs.push(JSON.parse(user));
+      return replies.shift()!;
+    };
+    const seen: string[] = [];
+
+    await runPipeline('add login', emptyPlan(), complete, {
+      scope: 'feature',
+      onRequirements: (requirements) => seen.push(...requirements.map((r) => r.id)),
+    });
+
+    expect(inputs.map((i) => i.scope)).toEqual(['feature', 'feature']);
+    expect(seen).toEqual(['req-a']);
+  });
+
   it('retries once and feeds the error back to the model', async () => {
     const prompts: string[] = [];
     const replies = ['not json', JSON.stringify(extraction), JSON.stringify(mapping)];
